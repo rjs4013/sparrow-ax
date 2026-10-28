@@ -7,11 +7,11 @@
 
 | 신호 | 감지 규칙 | 동작 |
 |---|---|---|
-| DB 구조 변경 | `**/migrations/**`, `**/*.sql`, `**/schema.*`, `**/prisma/**` | 테스트 + 검토 켬 |
+| DB 구조 변경 | `src/db/**`, `**/migrations/**`, `**/*.sql`, `**/schema.*`, `**/prisma/**` | 테스트 + 검토 켬 |
 | 인증 · 권한 | `**/auth/**`, `**/*auth*.*`, `**/*permission*.*` | 테스트 + 검토 켬 |
 | 입력 검증 · 암호화 | `**/validat*/**`, `**/*crypto*.*` | 검토 켬 |
-| 외부 API 계약 (나라장터 연동) | `**/narajangteo/**`, `**/g2b/**`, `**/*openapi*.*` | `full`로 승격 + 문서 영향 분석 |
-| 의존성 추가 · 변경 | `package.json`, `package-lock.json`, `**/package.json`, `requirements*.txt`, `pyproject.toml`, `pom.xml`, `build.gradle*` | 의존성 스캔(해당 도구 구성 후) + 검토 켬 |
+| 외부 API 계약 (나라장터 연동) | `src/g2b/**`, `**/narajangteo/**`, `**/g2b/**`, `**/*openapi*.*` | `full`로 승격 + 문서 영향 분석 |
+| 의존성 추가 · 변경 | `package.json`, `package-lock.json`, `**/package.json`, `requirements*.txt`, `pyproject.toml`, `pom.xml`, `build.gradle*` | `npm audit`(gate.sh에 구성됨) + 검토 켬 |
 | 메일 발송 코드 | `**/mail/**`, `**/*smtp*.*`, `**/*mailer*.*` | **사람 확인** (실제 발송 금지. 메일 알림은 범위 밖) |
 | 민감 데이터 · 시크릿 | `.env`, `.env.*`, `**/.env`, `**/.env.*`, `**/*secret*`, `**/*credential*`, `**/*servicekey*` | **사람 확인** |
 | 에이전트 권한 설정 | `.claude/settings.json` | **사람 확인** |
