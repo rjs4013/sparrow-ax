@@ -1,0 +1,148 @@
+import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { test } from 'node:test';
+import { createMatcher, loadMonitoringConfig, parseMonitoringConfig, type ContractRecord } from './contracts.ts';
+
+const CAT = '4323320501';
+const base = {
+  categoryCodes: [CAT],
+  companies: [
+    {
+      id: 'a', label: '에이', matchNames: ['주식회사 에이'], provisional: false,
+      products: [{ id: '11111111', name: 'A1' }, { id: '33333333', name: 'A3' }],
+    },
+    {
+      id: 'b', label: '비', matchNames: ['비', '비코리아'], provisional: true,
+      products: [{ id: '11111111', name: 'B1' }, { id: '22222222', name: 'B2' }],
+    },
+  ],
+};
+const matcher = createMatcher(parseMonitoringConfig(base));
+const rec = (over: Partial<ContractRecord> = {}): ContractRecord => ({
+  categoryCode: CAT, companyName: '주식회사 에이', productId: '33333333', ...over,
+});
+
+test('분류번호가 보안소프트웨어가 아니면, 업체명이 맞아도 제외한다 (1차)', () => {
+  assert.deepEqual(matcher.classify(rec({ categoryCode: '4323320502' })), { pass: false, rejected: 'category' });
+  assert.deepEqual(matcher.classify(rec({ categoryCode: '432332050' })), { pass: false, rejected: 'category' });
+  assert.deepEqual(matcher.classify(rec({ categoryCode: '' })), { pass: false, rejected: 'category' });
+});
+
+test('업체명은 정확 일치만 통과한다: 비슷한 이름 · 포함 관계는 제외 (2차)', () => {
+  for (const name of ['주식회사에이', '(주)에이', '에이', '주식회사 에이코리아', '주식회사 에이 Korea', '']) {
+    assert.deepEqual(matcher.classify(rec({ companyName: name })), { pass: false, rejected: 'company' }, name);
+  }
+});
+
+test('업체명 앞뒤 공백은 무시하고, 별칭 상호도 같은 업체로 본다', () => {
+  assert.deepEqual(matcher.classify(rec({ companyName: ' 주식회사 에이 ' })), {
+    pass: true, companyId: 'a', verified: true, idConflict: false,
+  });
+  assert.equal(matcher.classify(rec({ companyName: '비코리아', productId: '22222222' })).pass, true);
+});
+
+test('식별번호가 목록에 있으면 확인 대상, 없으면 신제품도 저장 대상이다 (3차)', () => {
+  assert.deepEqual(matcher.classify(rec({ productId: '33333333' })), { pass: true, companyId: 'a', verified: true, idConflict: false });
+  assert.deepEqual(matcher.classify(rec({ productId: '99999999' })), { pass: true, companyId: 'a', verified: false, idConflict: false });
+});
+
+test('다른 업체 목록에만 있는 식별번호는 이 업체의 확인 대상이 아니다', () => {
+  assert.deepEqual(matcher.classify(rec({ productId: '22222222' })), { pass: true, companyId: 'a', verified: false, idConflict: false });
+});
+
+test('여러 업체에 걸친 식별번호는 업체명으로 판별하고 대조 필요로 표시한다', () => {
+  assert.deepEqual(matcher.conflictIds, ['11111111']);
+  assert.deepEqual(matcher.classify(rec({ productId: '11111111' })), { pass: true, companyId: 'a', verified: true, idConflict: true });
+  assert.deepEqual(matcher.classify(rec({ companyName: '비', productId: '11111111' })), { pass: true, companyId: 'b', verified: true, idConflict: true });
+});
+
+test('설정 검증: 분류번호 · 식별번호 자릿수, 중복, 빈 값을 거부한다', () => {
+  const withCompany = (over: object) => ({ ...base, companies: [{ ...base.companies[0], ...over }] });
+  assert.throws(() => parseMonitoringConfig({ ...base, categoryCodes: ['123456789'] }), /10자리/);
+  assert.throws(() => parseMonitoringConfig({ ...base, categoryCodes: [] }), /categoryCodes/);
+  assert.throws(() => parseMonitoringConfig(withCompany({ products: [{ id: '1234567', name: 'x' }] })), /8자리/);
+  assert.throws(() => parseMonitoringConfig(withCompany({ products: [{ id: '11111111' }, { id: '11111111' }] })), /중복/);
+  assert.throws(() => parseMonitoringConfig(withCompany({ matchNames: [] })), /matchNames/);
+  assert.throws(() => parseMonitoringConfig(withCompany({ matchNames: ['  '] })), /빈 값/);
+  assert.throws(() => parseMonitoringConfig(withCompany({ provisional: 'yes' })), /provisional/);
+  assert.throws(() => parseMonitoringConfig({ ...base, companies: [base.companies[0], base.companies[0]] }), /중복/);
+  assert.throws(() => parseMonitoringConfig({ ...base, companies: [base.companies[0], { ...base.companies[1], matchNames: ['주식회사 에이'] }] }), /중복/);
+  assert.throws(() => parseMonitoringConfig(null), /객체/);
+});
+
+test('실제 설정 파일: 9개사, 식별번호 58개, 분류번호 4323320501, 제외 업체 없음, 충돌 번호 4개', () => {
+  const config = loadMonitoringConfig();
+  assert.deepEqual(config.categoryCodes, ['4323320501']);
+  assert.deepEqual(config.companies.map((c) => c.label).sort(), ['나일소프트', '래브라도랩스', '레드펜소프트', '스패로우', '에스에스알', '정보라인', '코드마인드', '코드원', '하로스']);
+  assert.equal(config.companies.reduce((n, c) => n + c.products.length, 0), 58);
+
+  const names = config.companies.flatMap((c) => c.matchNames);
+  for (const excluded of ['이븐스타', '싸이버텍', '파수닷컴']) assert.ok(!names.includes(excluded), excluded);
+  assert.ok(names.includes('트리니티소프트'), '트리니티소프트는 에스에스알 별칭으로 포함');
+
+  const sparrow = config.companies.find((c) => c.id === 'sparrow');
+  assert.deepEqual(sparrow?.matchNames, ['주식회사 스패로우']);
+  assert.equal(sparrow?.provisional, false);
+  assert.equal(sparrow?.products.length, 24);
+
+  const real = createMatcher(config);
+  assert.deepEqual(real.conflictIds, ['22300118', '22300119', '22849502', '22849503']);
+  assert.deepEqual(real.classify({ categoryCode: CAT, companyName: '주식회사 스패로우', productId: '26181128' }), {
+    pass: true, companyId: 'sparrow', verified: true, idConflict: false,
+  });
+  assert.deepEqual(real.classify({ categoryCode: CAT, companyName: '나일소프트', productId: '22849502' }), {
+    pass: true, companyId: 'nilesoft', verified: true, idConflict: true,
+  });
+  assert.equal(real.classify({ categoryCode: CAT, companyName: '싸이버텍', productId: '22835795' }).pass, false);
+});
+
+test('전각 공백 · NBSP · 개행은 무시하지만 대소문자와 내부 공백 차이는 거부한다', () => {
+  for (const name of ['\u3000주식회사 에이\u3000', '\u00a0주식회사 에이\u00a0', '주식회사 에이\n']) {
+    assert.equal(matcher.classify(rec({ companyName: name })).pass, true, JSON.stringify(name));
+  }
+  for (const name of ['주식회사  에이', '주식회사\u00a0에이']) {
+    assert.deepEqual(matcher.classify(rec({ companyName: name })), { pass: false, rejected: 'company' }, JSON.stringify(name));
+  }
+});
+
+test('분류번호와 업체명이 모두 틀리면 1차(category) 사유가 우선한다', () => {
+  assert.deepEqual(matcher.classify(rec({ categoryCode: '0000000000', companyName: '없는회사' })), { pass: false, rejected: 'category' });
+});
+
+test('실제 설정: 업체별 식별번호 수 · 잠정 여부 · 별칭 분류', () => {
+  const config = loadMonitoringConfig();
+  const counts = Object.fromEntries(config.companies.map((c) => [c.id, c.products.length]));
+  assert.deepEqual(counts, {
+    sparrow: 24, ssr: 9, infoline: 10, codemind: 5, haros: 1, nilesoft: 6, redpen: 0, codeone: 2, labradorlabs: 1,
+  });
+  for (const c of config.companies) assert.equal(c.provisional, c.id !== 'sparrow', c.id);
+
+  const real = createMatcher(config);
+  const hit = (companyName: string, productId: string) => real.classify({ categoryCode: CAT, companyName, productId });
+  assert.deepEqual(hit('트리니티소프트', '25613507'), { pass: true, companyId: 'ssr', verified: true, idConflict: false });
+  assert.deepEqual(hit('에스에스알', '22849502'), { pass: true, companyId: 'ssr', verified: true, idConflict: true });
+  assert.deepEqual(hit('정보라인', '22849502'), { pass: true, companyId: 'infoline', verified: true, idConflict: true });
+  // 레드펜소프트는 받은 식별번호가 없어 업체명만 통과하고 확인 대상 표시는 없다.
+  assert.deepEqual(hit('레드펜소프트', '12345678'), { pass: true, companyId: 'redpen', verified: false, idConflict: false });
+  // 제외된 업체
+  for (const name of ['이븐스타', '파수닷컴']) assert.deepEqual(hit(name, '24121890'), { pass: false, rejected: 'company' }, name);
+});
+
+test('설정을 읽다 실패하면 오류 메시지에 파일 경로가 들어간다', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'sparrow-cfg-'));
+  try {
+    const badJson = join(dir, 'bad.json');
+    writeFileSync(badJson, '{ not json');
+    assert.throws(() => loadMonitoringConfig(badJson), (err: Error) => err.message.includes(badJson));
+
+    const badShape = join(dir, 'shape.json');
+    writeFileSync(badShape, JSON.stringify({ categoryCodes: ['123'], companies: [] }));
+    assert.throws(() => loadMonitoringConfig(badShape), (err: Error) => err.message.includes(badShape) && err.message.includes('10자리'));
+
+    assert.throws(() => loadMonitoringConfig(join(dir, 'missing.json')), (err: Error) => err.message.includes('missing.json'));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

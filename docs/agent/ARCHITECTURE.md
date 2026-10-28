@@ -21,10 +21,13 @@ Node 24 + TypeScript(`tsc --noEmit`으로 타입 검사, 실행은 Node의 타�
 - `src/db/index.ts`: `openDb(path)`는 SQLite를 열고(WAL, 외래키 켬), `migrate(db, list?)`는 미적용 마이그레이션만 id 순으로 트랜잭션 실행한다. 테이블 스키마는 `migrations` 배열에 `{ id: '0001_...', sql }`로 추가한다(현재 비어 있음).
 - `src/g2b/client.ts`: `loadG2bConfig(env)`는 `G2B_SERVICE_KEY` · `G2B_BASE_URL`을 읽고, `createG2bClient(config, fetch?)`는 `buildUrl` · `get`을 제공한다. 서비스키는 오류 메시지에 남기지 않는다(호출 실패 · JSON 파싱 오류는 원문 · 인코딩 형태 모두 마스킹, 응답 오류에는 키 없는 URL 사용). 빈 키로는 클라이언트를 만들 수 없다. 포털의 Decoding(원문) 키를 쓴다. 리다이렉트 · 타임아웃 정책은 실호출 지시서에서 정한다. 서비스별 엔드포인트는 **미확정**이라 실호출 코드는 없다.
 - `src/web/server.ts`: `buildServer()`는 Fastify 앱을 만든다(현재 `GET /health`만). `src/web/main.ts`는 DB 초기화 후 `HOST`(기본 127.0.0.1) · `PORT`(기본 3000)로 기동한다. 실행은 `npm start`.
+- `src/filters/contracts.ts` (경쟁사 계약 · 납품 필터, 순수 함수): `loadMonitoringConfig()`가 `config/contract-monitoring.json`을 읽어 `parseMonitoringConfig`로 엄격히 검증한다(분류번호 10자리, 식별번호 8자리, 업체 id · 상호 중복 거부). `createMatcher(config).classify(record)`는 1차 물품분류번호 정확 일치 → 2차 업체명 정확 일치(앞뒤 공백만 무시) 순으로 거르고, 통과한 건에 3차로 `verified`(식별번호가 그 업체의 확인 대상 목록에 있음)와 `idConflict`(여러 업체 목록에 걸친 번호라 원본 대조 필요)를 붙인다. 3차는 걸러내지 않으므로 목록에 없는 신제품도 통과한다. `conflictIds`는 현재 `22300118` · `22300119` · `22849502` · `22849503`이다.
+- `src/filters/dates.ts`: 날짜는 `YYYY-MM-DD` 문자열. `collectionRange(lastSuccess, today)`는 수집할 납품요구일자 범위를 돌려준다(마지막 성공일 다음 날 ~ 어제, 첫 실행은 올해 1월 1일 ~ 어제, 수집할 날이 없으면 `null`, 마지막 성공일이 오늘보다 미래면 오류). `eachDay`는 일 단위로 나눠 API 일일 한도를 지키기 위한 것이고, `todayKst`는 한국 시간 기준 오늘이다.
+- `config/contract-monitoring.json`: 분류번호, 9개사(상호 · 잠정 여부 · 확인 대상 식별번호 58개). `provisional: true`인 업체의 상호는 나라장터 등록 상호를 확인하지 못한 잠정 표기라 **서비스키 발급 후 수집 데이터로 확정해야 한다**(정확 일치라 틀리면 놓친다). 원문 출처는 `docs/agent/worklog/WO-20261028-04-input-1.md`.
 - 환경변수는 `env.example` 참조(`.env`로 복사). 실행 명령: `npm run build` · `lint` · `test`, 전체 게이트는 `bash scripts/gate.sh`.
 
 ## 처리 흐름
-- 경쟁사: 전일자 납품요구 조회 → [1차] 물품분류번호 → [2차] 업체명 → [3차] 물품식별번호 → 저장 → 웹 조회 → 엑셀 내보내기
+- 경쟁사: 수집 범위 계산(마지막 성공일 다음 날 ~ 어제, 일 단위 호출) → 납품요구 조회 → [1차] 물품분류번호 → [2차] 업체명 → [3차] 물품식별번호 '확인 대상' 표시 → 저장 → 웹 조회 → 엑셀 내보내기. (구현 상태: 범위 계산과 3단 필터까지. 조회 · 저장 · View는 아직 없음)
 - 입찰·낙찰: 전일자 신규 공고 조회 → 공고명 키워드 필터 → 저장 → 웹 조회 / 신규 낙찰 수집 → 기존 공고 매칭 또는 단독 저장 → 웹 조회
 
 ## 핵심 알고리즘 · 외부 의존
@@ -41,7 +44,13 @@ Node 24 + TypeScript(`tsc --noEmit`으로 타입 검사, 실행은 Node의 타�
 2. `migrate`를 쓰는 테스트에 새 스키마를 검증하는 케이스를 추가한다.
 3. 위험 신호 "DB 구조 변경"이 켜지므로 검토를 받는다.
 
-"새 키워드 추가", "새 모니터링 대상 업체 추가" 같은 확장은 해당 기능이 구현되면 여기에 적는다.
+### 모니터링 대상 업체 · 확인 대상 제품 추가 (경쟁사)
+1. `config/contract-monitoring.json`의 `companies`에 업체를 추가하거나, 기존 업체의 `products`에 8자리 물품식별번호를 추가한다. 상호는 `matchNames`에 나라장터 등록 상호 그대로 넣는다(정확 일치).
+2. 등록 상호를 확인하면 `provisional`을 `false`로 바꾼다.
+3. `bash scripts/gate.sh`를 돌린다. 설정 검증이 형식 오류와 중복을 막고, `src/filters/contracts.test.ts`의 "실제 설정 파일" 테스트가 업체 수 · 식별번호 수 · 충돌 번호 목록을 고정하고 있으므로 의도한 변경이면 그 숫자도 함께 고친다.
+4. 요구사항 문서 3.1 · 9.2의 대상 업체 목록과 어긋나면 `docs` 경로로 문서를 맞춘다.
+
+"새 키워드 추가"(입찰) 같은 확장은 해당 기능이 구현되면 여기에 적는다.
 
 ## 문서 지도
 

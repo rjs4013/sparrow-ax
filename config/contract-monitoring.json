@@ -1,0 +1,329 @@
+{
+  "categoryCodes": [
+    "4323320501"
+  ],
+  "companies": [
+    {
+      "id": "sparrow",
+      "label": "스패로우",
+      "matchNames": [
+        "주식회사 스패로우"
+      ],
+      "provisional": false,
+      "products": [
+        {
+          "id": "26181128",
+          "name": "플랫폼 Standard"
+        },
+        {
+          "id": "26181129",
+          "name": "플랫폼 Ultimate"
+        },
+        {
+          "id": "26181130",
+          "name": "소스코드 보안약점 분석 권한"
+        },
+        {
+          "id": "26181131",
+          "name": "소스코드 품질 결함 분석 권한"
+        },
+        {
+          "id": "26181132",
+          "name": "웹 취약점 분석 권한"
+        },
+        {
+          "id": "26181133",
+          "name": "오픈소스 취약점 분석 권한"
+        },
+        {
+          "id": "26181134",
+          "name": "공급망 보안 취약점 통합 분석 권한"
+        },
+        {
+          "id": "26181135",
+          "name": "CI/CD 연동 Full Package"
+        },
+        {
+          "id": "26181136",
+          "name": "오픈소스 소프트웨어 관리 포탈"
+        },
+        {
+          "id": "26181140",
+          "name": "사용자 계정 5User Pack"
+        },
+        {
+          "id": "24484590",
+          "name": "Sparrow SAST/SAQT v5.6 E, 5Users"
+        },
+        {
+          "id": "24484591",
+          "name": "Sparrow SAST/SAQT v5.6 E, 1Server"
+        },
+        {
+          "id": "23585469",
+          "name": "Sparrow SAST/SAQT v5.6"
+        },
+        {
+          "id": "23585470",
+          "name": "Sparrow SAST/SAQT v5.6"
+        },
+        {
+          "id": "23467388",
+          "name": "Sparrow DAST v1.6"
+        },
+        {
+          "id": "23467389",
+          "name": "Sparrow DAST v1.6"
+        },
+        {
+          "id": "24633851",
+          "name": "Sparrow DAST v2.6"
+        },
+        {
+          "id": "24682638",
+          "name": "Sparrow SCA v1.6"
+        },
+        {
+          "id": "22564613",
+          "name": "SPARROW v4.6 SCE Server"
+        },
+        {
+          "id": "22564614",
+          "name": "SPARROW v4.6 QCE Server"
+        },
+        {
+          "id": "22567280",
+          "name": "SPARROW v4.6 QCE Client"
+        },
+        {
+          "id": "22568215",
+          "name": "SPARROW v4.6 SCE Client"
+        },
+        {
+          "id": "24633852",
+          "name": "DAST v2.6, 5User"
+        },
+        {
+          "id": "24682639",
+          "name": "SCA v1.6, 5User"
+        }
+      ]
+    },
+    {
+      "id": "ssr",
+      "label": "에스에스알",
+      "matchNames": [
+        "에스에스알",
+        "트리니티소프트"
+      ],
+      "provisional": true,
+      "products": [
+        {
+          "id": "22300118",
+          "name": "CodeRay Manager"
+        },
+        {
+          "id": "22300119",
+          "name": "CodeRay Agent"
+        },
+        {
+          "id": "22849502",
+          "name": "CODE-RAY XG V2.5 Manager"
+        },
+        {
+          "id": "22849503",
+          "name": "CODE-RAY XG V2.5 Agent"
+        },
+        {
+          "id": "24101085",
+          "name": "CODE-RAY XG V6.0"
+        },
+        {
+          "id": "25057573",
+          "name": "CODE-RAY XG V6.0 R2"
+        },
+        {
+          "id": "25057574",
+          "name": "CODE-RAY XG V6.0 R2"
+        },
+        {
+          "id": "25613507",
+          "name": "SCAN-RAY XG V6.0 User"
+        },
+        {
+          "id": "25613508",
+          "name": "SCAN-RAY XG V6.0 Server"
+        }
+      ]
+    },
+    {
+      "id": "infoline",
+      "label": "정보라인",
+      "matchNames": [
+        "정보라인"
+      ],
+      "provisional": true,
+      "products": [
+        {
+          "id": "21925934",
+          "name": "BigLook WASS Manager"
+        },
+        {
+          "id": "21925935",
+          "name": "BigLook WASS Agent"
+        },
+        {
+          "id": "22809616",
+          "name": "BigLook V5.0 Server + 4Core"
+        },
+        {
+          "id": "22809617",
+          "name": "BigLook V5.0 1Core"
+        },
+        {
+          "id": "22849502",
+          "name": "BigLook WASS v1.2"
+        },
+        {
+          "id": "24003938",
+          "name": "BigLook V6.0 / BigLook Fuzzer V3.0"
+        },
+        {
+          "id": "24121890",
+          "name": "BigLook V6.0"
+        },
+        {
+          "id": "24121891",
+          "name": "BigLook V6.0"
+        },
+        {
+          "id": "25179893",
+          "name": "BigLook V7.0, Server"
+        },
+        {
+          "id": "25179894",
+          "name": "BigLook V7.0, Core"
+        }
+      ]
+    },
+    {
+      "id": "codemind",
+      "label": "코드마인드",
+      "matchNames": [
+        "코드마인드"
+      ],
+      "provisional": true,
+      "products": [
+        {
+          "id": "23238176",
+          "name": "Codemind CSI 1.5"
+        },
+        {
+          "id": "23910027",
+          "name": "CODEMIND 3.6"
+        },
+        {
+          "id": "23910028",
+          "name": "CODEMIND 3.6"
+        },
+        {
+          "id": "25096643",
+          "name": "CODEMIND v4.5, Server"
+        },
+        {
+          "id": "25096644",
+          "name": "CODEMIND v4.5, User"
+        }
+      ]
+    },
+    {
+      "id": "haros",
+      "label": "하로스",
+      "matchNames": [
+        "하로스"
+      ],
+      "provisional": true,
+      "products": [
+        {
+          "id": "25175660",
+          "name": "Fortify Enterprise v3.1, 5User"
+        }
+      ]
+    },
+    {
+      "id": "nilesoft",
+      "label": "나일소프트",
+      "matchNames": [
+        "나일소프트"
+      ],
+      "provisional": true,
+      "products": [
+        {
+          "id": "22300118",
+          "name": "Secuguard WSE V2.1"
+        },
+        {
+          "id": "22300119",
+          "name": "Secuguard WSE V2.1"
+        },
+        {
+          "id": "22849502",
+          "name": "Secuguard WSE V2.1 / WebSCAN v2.1"
+        },
+        {
+          "id": "22849503",
+          "name": "Secuguard WSE V2.1"
+        },
+        {
+          "id": "23382721",
+          "name": "Secuguard WSE WebSCAN v2.1"
+        },
+        {
+          "id": "23382723",
+          "name": "Secuguard WSE WebSCAN v2.1"
+        }
+      ]
+    },
+    {
+      "id": "redpen",
+      "label": "레드펜소프트",
+      "matchNames": [
+        "레드펜소프트"
+      ],
+      "provisional": true,
+      "products": []
+    },
+    {
+      "id": "codeone",
+      "label": "코드원",
+      "matchNames": [
+        "코드원"
+      ],
+      "provisional": true,
+      "products": [
+        {
+          "id": "25594646",
+          "name": "AMS v1.8, WEB/DB 2Server"
+        },
+        {
+          "id": "25594647",
+          "name": "AMS v1.8"
+        }
+      ]
+    },
+    {
+      "id": "labradorlabs",
+      "label": "래브라도랩스",
+      "matchNames": [
+        "래브라도랩스"
+      ],
+      "provisional": true,
+      "products": [
+        {
+          "id": "25160977",
+          "name": "래브라도OSS v2.0, 1Server 연간 라이선스"
+        }
+      ]
+    }
+  ]
+}
