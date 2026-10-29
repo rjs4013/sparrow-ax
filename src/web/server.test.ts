@@ -141,7 +141,7 @@ test('수집 실행 상태: 기록 없음 / 성공 / 실패 사유', async () =>
   assert.match(failed, /실패/);
   assert.match(failed, /나라장터 API 호출 실패: &lt;b&gt;x&lt;\/b&gt;/);
   // 수집 상태는 관리 화면에만 보인다(사람 요구, 2026-10-29).
-  for (const url of ['/', '/deliveries', '/bids']) assert.doesNotMatch((await get(url)).body, /마지막 수집 상태|한국시간|수집 기록이 없습니다/, url);
+  for (const url of ['/', '/deliveries', '/bids']) assert.doesNotMatch((await get(url)).body, /마지막 수집 상태|한국시간|npm run collect/, url);
 });
 
 test('이전 · 다음 링크와 단위 전환 링크를 만든다', async () => {
@@ -542,4 +542,143 @@ test('입찰공고 화면: 낙찰정보의 HTML도 이스케이프되고, 낙찰
   const body = (await get('/bids')).body;
   assert.doesNotMatch(body, /<script>alert\(1\)/);
   assert.doesNotMatch(body, /<img src=x/);
+});
+
+// ---- 입찰 · 낙찰 대시보드 ----
+function setupDash() {
+  const { db, get } = setupB([
+    bRow({ bidNtceNo: 'A', noticeDate: '2026-10-29', demanderName: '가 기관', keywords: ['솔루션'] }),
+    bRow({ bidNtceNo: 'B', noticeDate: '2026-10-29', demanderName: '가 기관', keywords: ['솔루션', '소스코드'] }),
+    bRow({ bidNtceNo: 'C', noticeDate: '2026-10-27', demanderName: '나 기관', keywords: ['소스코드'] }),
+    bRow({ bidNtceNo: 'D', noticeDate: '2026-10-05', demanderName: '나 기관', keywords: ['보안약점'] }),
+    bRow({ bidNtceNo: 'E', noticeDate: '2026-09-30', demanderName: '다 기관', keywords: ['솔루션'] }),
+  ]);
+  upsertAwards(db, [
+    aRow({ bidNtceNo: 'X', opening: '2026-10-29 11:00', demanderName: '가 기관', keywords: ['솔루션'] }),
+    aRow({ bidNtceNo: 'Y', opening: '2026-10-05 11:00', demanderName: '나 기관', keywords: ['소스코드'] }),
+  ], '2026-10-29T00:00:00Z');
+  return { get };
+}
+const text = (html: string) => html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+
+test('대시보드: 신규 입찰공고 · 낙찰 건수를 고른 날짜 기준 일 · 주 · 월로 보여 준다', async () => {
+  const { get } = setupDash();
+  const body = (await get('/bids?view=day&date=2026-10-29')).body;
+  // 입찰공고: 일 2(A,B) · 주 3(A,B,C) · 월 4(+D)
+  assert.match(body, /<h2>신규 입찰공고 건수<\/h2><div class="kpi"><div class="kpi-cell on"><div class="kpi-n">2<\/div>[^]*?<div class="kpi-n">3<\/div>[^]*?<div class="kpi-n">4<\/div>/);
+  // 낙찰: 일 1(X) · 주 1 · 월 2(+Y)
+  assert.match(body, /<h2>신규 낙찰 건수<\/h2><div class="kpi"><div class="kpi-cell on"><div class="kpi-n">1<\/div>[^]*?<div class="kpi-n">1<\/div>[^]*?<div class="kpi-n">2<\/div>/);
+  // 보기 단위에 맞는 칸이 강조된다
+  const month = (await get('/bids?view=month&date=2026-10-29')).body;
+  assert.match(month, /<div class="kpi-cell on"><div class="kpi-n">4<\/div><div class="muted">월<\/div>/);
+});
+
+test('대시보드: 수요기관별 현황(선택 기간의 입찰공고 · 낙찰 건수, 많은 순)', async () => {
+  const { get } = setupDash();
+  const body = (await get('/bids?view=month&date=2026-10-29')).body;
+  const part = body.slice(body.indexOf('수요기관별 현황'), body.indexOf('공고 키워드별 발생 건수'));
+  const t = text(part);
+  // 10월: 가 기관(입찰 2 · 낙찰 1) 3건, 나 기관(입찰 2: C, D · 낙찰 1) 3건 — 같으면 이름순
+  assert.match(t, /가 기관 2 1/);
+  assert.match(t, /나 기관 2 1/);
+  assert.ok(part.indexOf('가 기관') < part.indexOf('나 기관'));
+  assert.doesNotMatch(t, /다 기관/);
+});
+
+test('대시보드: 키워드별 발생 건수와 추세 표 (필터 키워드만)', async () => {
+  const { get } = setupDash();
+  const body = (await get('/bids?view=month&date=2026-10-29')).body;
+  const counts = text(body.slice(body.indexOf('공고 키워드별 발생 건수'), body.indexOf('공고 키워드별 사업 추세')));
+  // 10월 입찰공고: 솔루션 2(A,B) · 소스코드 2(B,C) · 보안약점 1(D) / 낙찰: 솔루션 1 · 소스코드 1
+  assert.match(counts, /솔루션 2 1/);
+  assert.match(counts, /소스코드 2 1/);
+  assert.match(counts, /보안약점 1 0/);
+  // 추세(월 6개): 마지막 두 칸은 9월, 10월. 솔루션: 9월 1(E) → 10월 2
+  const trend = body.slice(body.indexOf('공고 키워드별 사업 추세'));
+  assert.match(trend, /<th class="num">2026-09<\/th><th class="num">2026-10<div class="muted">진행 중<\/div><\/th><th class="num">합계<\/th>/);
+  // 마지막 칸(10월)은 진행 중이라 완결된 두 기간(8월 · 9월)을 비교하는데 8월은 수집 전이라 비교하지 않는다.
+  assert.match(text(trend), /솔루션 [^]*? 1 2 3 -/);
+  assert.match(trend, /진행 중/);
+  assert.match(trend, /style="background:color-mix\(in srgb, var\(--accent\) /);
+  assert.doesNotMatch(trend, /AI|개인정보/);
+});
+
+test('대시보드: 수요기관 · 키워드 조건이 대시보드 전체에 적용된다', async () => {
+  const { get } = setupDash();
+  const org = (await get('/bids?view=month&date=2026-10-29&demander=' + encodeURIComponent('가 기관'))).body;
+  assert.match(org, /<h2>신규 입찰공고 건수<\/h2><div class="kpi"><div class="kpi-cell"><div class="kpi-n">2<\/div>/);
+  assert.doesNotMatch(text(org.slice(org.indexOf('수요기관별 현황'), org.indexOf('공고 키워드별 발생 건수'))), /나 기관 /);
+  const kw = (await get('/bids?view=month&date=2026-10-29&keyword=' + encodeURIComponent('보안약점'))).body;
+  assert.match(kw, /<h2>신규 입찰공고 건수<\/h2><div class="kpi">[^]*?<div class="kpi-n">1<\/div><div class="muted">월/);
+  const trend = text(kw.slice(kw.indexOf('공고 키워드별 사업 추세')));
+  assert.match(trend, /보안약점/);
+  assert.doesNotMatch(trend, /솔루션/);
+});
+
+test('대시보드: 일 보기는 14일, 주 보기는 8주 추세, 데이터가 없으면 안내 문구', async () => {
+  const { get } = setupDash();
+  const day = (await get('/bids?view=day&date=2026-10-29')).body;
+  assert.equal((day.slice(day.indexOf('공고 키워드별 사업 추세')).match(/<th class="num">\d\d-\d\d(?:<div class="muted">진행 중<\/div>)?<\/th>/g) ?? []).length, 14);
+  const week = (await get('/bids?view=week&date=2026-10-29')).body;
+  assert.equal((week.slice(week.indexOf('공고 키워드별 사업 추세')).match(/<th class="num">\d\d-\d\d~(?:<div class="muted">진행 중<\/div>)?<\/th>/g) ?? []).length, 8);
+  const empty = setupB();
+  const body = (await empty.get('/bids')).body;
+  assert.match(body, /선택 기간에 해당하는 입찰공고 · 낙찰정보가 없습니다/);
+  assert.match(body, /추세를 그릴 수 없습니다/);
+});
+
+test('대시보드: 수요기관 이름 등은 이스케이프된다', async () => {
+  const { get } = setupB([bRow({ demanderName: '<script>alert(1)</script>', keywords: ['솔루션'] })]);
+  const body = (await get('/bids')).body;
+  assert.doesNotMatch(body, /<script>alert\(1\)/);
+});
+
+test('대시보드: 수집이 시작되기 전 기간이 추세 표에 있으면 "수집 전" 안내를 보여 준다', async () => {
+  const { get } = setupDash();
+  // 월 보기는 6개월(2026-05~10)을 보고 첫 수집일은 2026-09-30 → 안내가 나온다
+  const month = (await get('/bids?view=month&date=2026-10-29')).body;
+  assert.match(month, /입찰공고 수집은 2026-09-30부터 쌓였습니다/);
+  assert.match(month, /수집 전/);
+  // 일 보기는 14일(10-16~10-29)이 모두 수집 이후 → 안내 없음
+  const day = (await get('/bids?view=day&date=2026-10-29')).body;
+  assert.doesNotMatch(day, /입찰공고 수집은/);
+});
+
+test('대시보드: 직전 대비는 완결된 마지막 두 기간을 비교하고, 진행 중인 마지막 칸은 표시한다', async () => {
+  const { get } = setupB([
+    bRow({ bidNtceNo: 'A', noticeDate: '2026-10-26', keywords: ['솔루션'] }),
+    bRow({ bidNtceNo: 'B', noticeDate: '2026-10-27', keywords: ['솔루션'] }),
+    bRow({ bidNtceNo: 'C', noticeDate: '2026-10-27', keywords: ['솔루션'] }),
+  ]);
+  // 오늘 2026-10-29: 일 보기 마지막 칸(10-29)은 진행 중 → 10-28(0)과 10-27(2) 비교 = ▼ 2
+  const open = (await get('/bids?view=day&date=2026-10-29')).body;
+  assert.match(open, /진행 중/);
+  assert.match(text(open.slice(open.indexOf('공고 키워드별 사업 추세'))), /솔루션 [^]*? ▼ 2/);
+  // 10-27로 고르면 마지막 칸이 완결(10-27 = 2건, 10-26 = 1건) → ▲ 1
+  const done = (await get('/bids?view=day&date=2026-10-27')).body;
+  assert.doesNotMatch(done, /<span class="muted">진행 중<\/span>/);
+  assert.match(text(done.slice(done.indexOf('공고 키워드별 사업 추세'))), /솔루션 [^]*? ▲ 1/);
+  assert.match(done, /진행 중인 기간은 제외/);
+});
+
+test('대시보드: 키워드를 고르면 키워드별 건수와 추세도 그 키워드 한 줄로 제한된다 (다른 키워드가 든 공고여도)', async () => {
+  const { get } = setupDash();
+  const body = (await get('/bids?view=month&date=2026-10-29&keyword=' + encodeURIComponent('솔루션'))).body;
+  // 공고 B는 솔루션 · 소스코드 둘 다 가졌지만 소스코드 줄은 나오지 않는다
+  const counts = text(body.slice(body.indexOf('공고 키워드별 발생 건수'), body.indexOf('공고 키워드별 사업 추세')));
+  assert.match(counts, /솔루션 2 1/);
+  assert.doesNotMatch(counts, /소스코드/);
+  const trendCard = body.slice(body.indexOf('공고 키워드별 사업 추세'), body.indexOf('건수는 (공고번호, 차수) 행 기준'));
+  assert.match(text(trendCard), /솔루션/);
+  assert.doesNotMatch(text(trendCard), /소스코드/);
+});
+
+test('대시보드: 건수 기준(차수 행) · 키워드 중복 계산 안내와 낙찰정보 수집 시작일 안내', async () => {
+  const { get } = setupDash();
+  const body = (await get('/bids?view=month&date=2026-10-29')).body;
+  assert.match(body, /건수는 \(공고번호, 차수\) 행 기준/);
+  assert.match(body, /여러 키워드에 걸리면 각각 세므로/);
+  assert.match(body, /낙찰정보 수집은 2026-10-05부터/);
+  const none = (await setupB().get('/bids')).body;
+  assert.match(none, /낙찰정보 수집 기록이 없습니다/);
 });

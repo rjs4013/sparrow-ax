@@ -1,11 +1,14 @@
 import Fastify from 'fastify';
 import type { DatabaseSync } from 'node:sqlite';
-import { listAwards, type AwardView } from '../db/awards.ts';
-import { listBids, type BidRow } from '../db/bids.ts';
+import { trendBuckets } from '../dashboard/stats.ts';
+import { firstAwardDate, listAwards, type AwardView } from '../db/awards.ts';
+import { firstNoticeDate, listBids, type BidRow } from '../db/bids.ts';
 import { lastRunByKind, listContracts, type ContractRow, type RunKind, type RunRecord } from '../db/contracts.ts';
 import { listDeliveries, type DeliveryRow } from '../db/deliveries.ts';
 import { buildWorkbook, exportFileName } from '../export/excel.ts';
 import { addDays, periodRange, shiftPeriod, todayKst, type PeriodView } from '../filters/dates.ts';
+import { dashboardHtml, TREND_COUNT, type DashItem } from './dashboard.ts';
+import { esc, won } from './html.ts';
 
 export interface ServerOptions {
   db?: DatabaseSync;
@@ -24,14 +27,8 @@ const VIEWS: { view: PeriodView; label: string }[] = [
   { view: 'month', label: '월' },
 ];
 
-// 계약명 · 업체명 등은 외부(나라장터) 데이터이므로 모두 이스케이프해서 출력한다.
-const esc = (v: string | number): string =>
-  String(v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-
 // RFC 5987 filename*: encodeURIComponent가 인코딩하지 않는 ' ( ) * 도 퍼센트 인코딩한다.
 const encodeRfc5987 = (s: string): string => encodeURIComponent(s).replace(/['()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
-
-const won = (n: number | null): string => (n === null ? '-' : n.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ','));
 
 const CSS = `
 :root{--bg:#f7f7f5;--fg:#1f2328;--muted:#6a7078;--card:#fff;--line:#e2e3e0;--accent:#1d5fd0;--ok:#15803d;--bad:#b42318;--warn:#b45309;--chip:#eef1f6}
@@ -48,6 +45,9 @@ select,button{font:inherit;padding:4px 8px;border:1px solid var(--line);border-r
 th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top}th{font-size:12px;color:var(--muted);font-weight:600;white-space:nowrap}
 td.num{text-align:right;white-space:nowrap}.chip{display:inline-block;padding:1px 8px;border-radius:999px;background:var(--chip);font-size:12px;margin:0 4px 2px 0;white-space:nowrap}
 .chip.ok{color:var(--ok)}.chip.warn{color:var(--warn)}.empty{padding:28px;text-align:center}
+.grid{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(300px,1fr))}.grid>.card{margin-bottom:0}.grid+.grid,.grid+.card{margin-top:12px}
+.kpi{display:flex;gap:8px}.kpi-cell{flex:1;text-align:center;padding:8px 4px;border:1px solid var(--line);border-radius:8px}.kpi-cell.on{background:var(--chip);border-color:var(--accent)}.kpi-n{font-size:24px;font-weight:700;line-height:1.2}
+table.compact{min-width:0}.bar{height:6px;border-radius:3px;background:var(--accent);opacity:.55;margin-top:3px}td.heat{min-width:48px}.up{color:var(--ok);font-weight:600}.down{color:var(--bad);font-weight:600}
 @media (max-width:640px){main{padding:12px}}
 `;
 
@@ -144,8 +144,9 @@ interface Shell {
   page: Page; view: PeriodView; date: string; company: string; companies: { id: string; label: string }[];
   range: { from: string; to: string };
   title: string; summary: string; body: string; note: string;
-  // 본문 카드 아래에 이어 붙이는 카드(입찰공고 화면의 낙찰정보 목록).
+  // 본문 카드 아래에 이어 붙이는 카드(입찰공고 화면의 낙찰정보 목록), 위에 놓는 영역(입찰 · 낙찰 대시보드).
   after?: string;
+  before?: string;
   // 입찰공고 화면처럼 업체 선택 대신 쓰는 조회 조건(선택 상자 HTML)과 그 값(이동 링크에 싣는다). 있으면 업체 선택 · 엑셀 링크는 없다.
   controls?: string; extra?: Record<string, string>;
 }
@@ -169,6 +170,7 @@ function shell(s: Shell): string {
 ${s.controls ?? `<select name="company" aria-label="업체">${options}</select>`}<button type="submit">조회</button>
 ${s.controls ? '' : `<a class="dl" href="${esc(exportHref)}" title="고른 날짜가 속한 달 전체를 엑셀로 내려받습니다">엑셀 내보내기</a>`}
 <span class="grow"></span><b>${esc(s.range.from)} ~ ${esc(s.range.to)}</b><span class="muted">${esc(s.summary)}</span></form></div>
+${s.before ?? ''}
 <div class="card">${s.body}</div>
 ${s.after ?? ''}
 <p class="muted">${s.note}</p>
@@ -295,8 +297,27 @@ export function buildServer(opts: ServerOptions = {}) {
       const range = periodRange(view, date);
       const inRange = listBids(db, range);
       const awardsInRange = listAwards(db, range);
-      const rows = inRange.filter((r) => (demander === '' || r.demanderName === demander) && (keyword === '' || r.keywords.includes(keyword)));
-      const awards = awardsInRange.filter((a) => (demander === '' || a.demanderName === demander) && (keyword === '' || a.keywords.includes(keyword)));
+      const matches = (d: string, k: string[]) => (demander === '' || d === demander) && (keyword === '' || k.includes(keyword));
+      const rows = inRange.filter((r) => matches(r.demanderName, r.keywords));
+      const awards = awardsInRange.filter((a) => matches(a.demanderName, a.keywords));
+
+      // 대시보드: 일/주/월 건수와 추세 기간 전체를 덮는 범위의 입찰공고 · 낙찰정보에 같은 수요기관 · 키워드 조건을 적용해 집계한다.
+      const month = periodRange('month', date);
+      const week = periodRange('week', date);
+      const trendFrom = trendBuckets(view, date, TREND_COUNT[view])[0]?.from ?? range.from;
+      const wide = {
+        from: [trendFrom, month.from, week.from, range.from].sort()[0] as string,
+        to: [month.to, week.to, range.to].sort().reverse()[0] as string,
+      };
+      const dashBids: DashItem[] = listBids(db, wide).filter((r) => matches(r.demanderName, r.keywords))
+        .map((r) => ({ date: r.noticeDate, demander: r.demanderName, keywords: r.keywords }));
+      const dashAwards: DashItem[] = listAwards(db, wide).filter((a) => matches(a.demanderName, a.keywords))
+        .map((a) => ({ date: a.opening.slice(0, 10), demander: a.demanderName, keywords: a.keywords }));
+      // 키워드를 고르면 키워드별 건수 · 추세도 그 키워드 한 줄로 제한한다(다른 키워드가 함께 든 공고여도).
+      const dashboard = dashboardHtml({
+        view, date, range, bids: dashBids, awards: dashAwards, keywords: keyword === '' ? keywords : [keyword],
+        dataFrom: firstNoticeDate(db), awardFrom: firstAwardDate(db), today: today(),
+      });
       // 고른 수요기관이 이 기간에 없어도 선택 상자에 남겨, 기간을 옮겨도 조건이 조용히 바뀌지 않게 한다.
       const demanders = [...new Set([...inRange.map((r) => r.demanderName), ...awardsInRange.map((a) => a.demanderName), ...(demander === '' ? [] : [demander])])].sort();
       const opt = (value: string, label: string, selected: string) => `<option value="${esc(value)}"${value === selected ? ' selected' : ''}>${esc(label)}</option>`;
@@ -306,7 +327,7 @@ export function buildServer(opts: ServerOptions = {}) {
       const html = shell({
         page: 'bids', view, date, company: '', companies: [], range, title: '입찰공고',
         summary: `${rows.length}건 · 수요기관 ${new Set(rows.map((r) => r.demanderName)).size}곳 · 낙찰 ${awards.length}건`,
-        body: `<h2>입찰공고</h2>${bidsBody(rows)}`, after: `<div class="card"><h2>낙찰정보</h2>${awardsBody(awards)}</div>`, controls, extra: { demander, keyword },
+        before: dashboard, body: `<h2>입찰공고</h2>${bidsBody(rows)}`, after: `<div class="card"><h2>낙찰정보</h2>${awardsBody(awards)}</div>`, controls, extra: { demander, keyword },
         note: '입찰공고는 공고일자, 낙찰정보는 개찰일자 기준이며 공고명에 필터 키워드(대소문자 무시 포함)가 있는 것만 저장합니다. 입찰공고의 금액은 추정가격입니다(요구사항의 "기초금액"은 입찰공고 응답에는 없고 낙찰정보에는 있습니다). 정정 · 재입찰 공고는 차수가 다른 행이고, 낙찰자는 개찰 며칠 뒤에 확정되어 그 전에는 "낙찰자 미확정"으로 보입니다(다시 받으면 갱신). 한 공고에 낙찰자가 여럿(품목별)이면 처음 만난 낙찰자만 보입니다.',
       });
       return reply
