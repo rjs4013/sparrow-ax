@@ -4,7 +4,7 @@ import { listDeliveries, upsertDeliveries, type DeliveryRow } from './deliveries
 import { migrate, openDb } from './index.ts';
 
 const row = (over: Partial<DeliveryRow> = {}): DeliveryRow => ({
-  dlvrReqNo: 'R26TB01997234', chgOrd: 0, prdctSno: '1', companyId: 'nilesoft', companyName: '(주)나일소프트', bizNo: '1234567890',
+  dlvrReqNo: 'R26TB01997234', requestName: '정보보안 솔루션 구매', chgOrd: 0, prdctSno: '1', companyId: 'nilesoft', companyName: '(주)나일소프트', bizNo: '1234567890',
   receivedDate: '2026-06-08', demanderCode: '1790364', demanderName: '고위공직자범죄수사처', demanderKind: '중앙행정기관',
   productClassNo: '43233205', productClassName: '트랜잭션보안및바이러스보호소프트웨어', productId: '24590125', productName: '웹방화벽',
   unitPrice: 45_500_000, qty: 1, amount: 45_500_000, deadline: '2026-07-08', contractNo: '002461624', contractStyle: '제3자단가계약',
@@ -19,7 +19,7 @@ const q = { from: '2026-06-01', to: '2026-06-30' };
 
 test('0003 마이그레이션이 delivery_requests 테이블을 만든다', () => {
   const db = openDb(':memory:');
-  assert.equal(migrate(db).length, 3);
+  assert.equal(migrate(db).length, 4);
   const tables = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all().map((r) => r['name']);
   assert.ok(tables.includes('delivery_requests'));
 });

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { finishRun, startRun, upsertContracts, type ContractRow } from '../db/contracts.ts';
 import { upsertDeliveries, type DeliveryRow } from '../db/deliveries.ts';
+import ExcelJS from 'exceljs';
 import { migrate, openDb } from '../db/index.ts';
 import { buildServer } from './server.ts';
 
@@ -173,7 +174,7 @@ test('수집 상태는 매일 증분 · 교차 검증 · 백필을 각각 보여
 
 // ---- 납품요구 화면 ----
 const dRow = (over: Partial<DeliveryRow> = {}): DeliveryRow => ({
-  dlvrReqNo: 'R26TB01997234', chgOrd: 0, prdctSno: '1', companyId: 'nilesoft', companyName: '(주)나일소프트', bizNo: '1234567890',
+  dlvrReqNo: 'R26TB01997234', requestName: '정보보안 솔루션 구매', chgOrd: 0, prdctSno: '1', companyId: 'nilesoft', companyName: '(주)나일소프트', bizNo: '1234567890',
   receivedDate: '2026-06-08', demanderCode: '1790364', demanderName: '고위공직자범죄수사처', demanderKind: '중앙행정기관',
   productClassNo: '43233205', productClassName: '트랜잭션보안및바이러스보호소프트웨어', productId: '24590125', productName: '웹방화벽',
   unitPrice: 45_500_000, qty: 2, amount: 91_000_000, deadline: '2026-07-08', contractNo: '002461624', contractStyle: '제3자단가계약',
@@ -265,4 +266,82 @@ test('두 화면은 서로 이동하는 링크를 갖고, 각 화면은 자기 �
   const deliveries = (await get('/deliveries?view=month&date=2026-06-15')).body;
   assert.match(deliveries, /href="\/\?view=month&amp;date=2026-06-15"/);
   assert.doesNotMatch(deliveries, /백필\(체결일자\)/);
+});
+
+// ---- 엑셀 내보내기 ----
+function setupX() {
+  const db = openDb(':memory:');
+  migrate(db);
+  upsertContracts(db, [
+    row({ untyNo: 'C1', signedDate: '2026-06-24', contractName: '6월 계약' }),
+    row({ untyNo: 'C2', signedDate: '2026-07-01', contractName: '7월 계약' }),
+    row({ untyNo: 'C3', signedDate: '2026-06-02', contractName: '6월 나일 계약', companyId: 'nilesoft', companyName: '(주)나일소프트' }),
+  ], '2026-10-29T00:00:00Z');
+  upsertDeliveries(db, [
+    dRow({ dlvrReqNo: 'D1', receivedDate: '2026-06-08', demanderName: '6월 기관' }),
+    dRow({ dlvrReqNo: 'D2', receivedDate: '2026-05-31', demanderName: '5월 기관' }),
+    dRow({ dlvrReqNo: 'D3', receivedDate: '2026-06-09', companyId: 'sparrow', companyName: '주식회사 스패로우', demanderName: '스패로우 기관' }),
+  ], '2026-10-29T00:00:00Z');
+  const app = buildServer({ db, companies, today: () => '2026-06-15', categoryCode: '43233205' });
+  return { get: (url: string) => app.inject({ method: 'GET', url }) };
+}
+
+async function load(res: { rawPayload: Buffer }): Promise<ExcelJS.Workbook> {
+  const wb = new ExcelJS.Workbook();
+  await wb.xlsx.load(res.rawPayload as unknown as ArrayBuffer);
+  return wb;
+}
+
+test('엑셀: 고른 날짜가 속한 달 전체를 두 시트로 내려받는다 (일/주 보기여도 그 달 전체)', async () => {
+  const { get } = setupX();
+  const res = await get('/export.xlsx?view=day&date=2026-06-15');
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.headers['content-type'], 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  assert.match(res.headers['content-disposition'] as string, /^attachment; filename="[\x20-\x7e]+"; filename\*=UTF-8''/);
+  assert.match(res.headers['content-disposition'] as string, new RegExp(encodeURIComponent('경쟁사_실적_2026-06.xlsx')));
+  assert.equal(res.headers['x-content-type-options'], 'nosniff');
+  assert.equal(res.headers['cache-control'], 'no-store');
+  const wb = await load(res);
+  const names = (ws: ExcelJS.Worksheet) => ws.getColumn(3).values.slice(2);
+  assert.deepEqual(names(wb.getWorksheet('납품요구')!).sort(), ['6월 기관', '스패로우 기관']);
+  assert.equal(wb.getWorksheet('계약')!.rowCount, 3); // 머리글 + 6월 계약 2건
+});
+
+test('엑셀: 업체를 고르면 그 업체만, 파일명에 업체 이름이 붙는다', async () => {
+  const { get } = setupX();
+  const res = await get('/export.xlsx?date=2026-06-15&company=sparrow');
+  assert.match(res.headers['content-disposition'] as string, new RegExp(encodeURIComponent('경쟁사_실적_2026-06_스패로우.xlsx')));
+  const wb = await load(res);
+  assert.deepEqual(wb.getWorksheet('납품요구')!.getColumn(3).values.slice(2), ['스패로우 기관']);
+  assert.deepEqual(wb.getWorksheet('계약')!.getColumn(4).values.slice(2), ['6월 계약']);
+});
+
+test('엑셀: 잘못된 조건은 400, db가 없으면 경로가 없다', async () => {
+  const { get } = setupX();
+  for (const url of ['/export.xlsx?date=abc', '/export.xlsx?date=2026-02-30', '/export.xlsx?company=nope', '/export.xlsx?view=year']) {
+    assert.equal((await get(url)).statusCode, 400, url);
+  }
+  assert.equal((await buildServer().inject({ method: 'GET', url: '/export.xlsx' })).statusCode, 404);
+});
+
+test('두 화면에 엑셀 내보내기 링크가 있고 화면 조건(날짜 · 업체)을 그대로 싣는다', async () => {
+  const { get } = setupX();
+  const contracts = (await get('/?view=week&date=2026-06-15&company=sparrow')).body;
+  const deliveries = (await get('/deliveries?view=day&date=2026-06-15&company=sparrow')).body;
+  for (const body of [contracts, deliveries]) {
+    assert.match(body, /href="\/export\.xlsx\?date=2026-06-15&amp;company=sparrow"[^>]*>엑셀 내보내기/);
+  }
+});
+
+test('엑셀: 업체 이름의 따옴표 · 괄호 · 개행이 있어도 헤더가 깨지지 않는다 (RFC 5987 인코딩)', async () => {
+  const db = openDb(':memory:');
+  migrate(db);
+  const app = buildServer({ db, companies: [{ id: 'x', label: "a'b(c)*\r\nd" }], today: () => '2026-06-15', categoryCode: '43233205' });
+  const res = await app.inject({ method: 'GET', url: '/export.xlsx?date=2026-06-15&company=x' });
+  const header = res.headers['content-disposition'] as string;
+  assert.equal(res.statusCode, 200);
+  assert.ok(!/[\r\n]/.test(header));
+  const star = header.split("filename*=UTF-8''")[1]!;
+  assert.ok(!/['()*]/.test(star), star);
+  assert.equal(decodeURIComponent(star), "경쟁사_실적_2026-06_a'b(c)___d.xlsx");
 });

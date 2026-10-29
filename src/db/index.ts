@@ -94,6 +94,11 @@ export const migrations: Migration[] = [
       CREATE INDEX delivery_requests_received_date ON delivery_requests (received_date);
     `,
   },
+  {
+    id: '0004_delivery_request_name',
+    // 납품요구건명(요구사항의 "공사명"). 이미 저장된 행은 빈 값이고 납품요구 백필을 다시 돌리면 채워진다.
+    sql: "ALTER TABLE delivery_requests ADD COLUMN dlvr_req_nm TEXT NOT NULL DEFAULT ''",
+  },
 ];
 
 export function openDb(path: string): DatabaseSync {

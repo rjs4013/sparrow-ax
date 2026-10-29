@@ -69,6 +69,7 @@ export async function collectDeliveries(
       const check = productId === '' ? { verified: false, idConflict: false } : matcher.checkProduct(companyId, productId);
       rows.push({
         dlvrReqNo,
+        requestName: field(it, 'dlvrReqNm'),
         chgOrd,
         prdctSno,
         companyId,
