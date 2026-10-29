@@ -75,11 +75,11 @@ test('설정 검증: 분류번호 · 식별번호 자릿수, 중복, 빈 값을 
   assert.throws(() => parseMonitoringConfig(null), /객체/);
 });
 
-test('실제 설정 파일: 9개사, 식별번호 58개, 분류번호 43233205, 제외 업체 없음, 충돌 번호 4개', () => {
+test('실제 설정 파일: 9개사, 식별번호 59개, 분류번호 43233205, 제외 업체 없음, 충돌 번호 4개', () => {
   const config = loadMonitoringConfig();
   assert.deepEqual(config.categoryCodes, ['43233205']);
   assert.deepEqual(config.companies.map((c) => c.label).sort(), ['나일소프트', '래브라도랩스', '레드펜소프트', '스패로우', '에스에스알', '정보라인', '코드마인드', '코드원', '하로스']);
-  assert.equal(config.companies.reduce((n, c) => n + c.products.length, 0), 58);
+  assert.equal(config.companies.reduce((n, c) => n + c.products.length, 0), 59);
 
   const names = config.companies.flatMap((c) => c.matchNames);
   for (const excluded of ['이븐스타', '싸이버텍', '파수닷컴']) assert.ok(!names.includes(excluded), excluded);
@@ -118,7 +118,7 @@ test('실제 설정: 업체별 식별번호 수 · 잠정 여부 · 별칭 분�
   const config = loadMonitoringConfig();
   const counts = Object.fromEntries(config.companies.map((c) => [c.id, c.products.length]));
   assert.deepEqual(counts, {
-    sparrow: 24, ssr: 9, infoline: 10, codemind: 5, haros: 1, nilesoft: 6, redpen: 0, codeone: 2, labradorlabs: 1,
+    sparrow: 24, ssr: 9, infoline: 10, codemind: 5, haros: 2, nilesoft: 6, redpen: 0, codeone: 2, labradorlabs: 1,
   });
   // 실제 응답으로 등록 상호를 확인한 업체만 provisional=false다. 에스에스알은 별칭(트리니티소프트)이, 레드펜소프트는 등록 상호가 미확인이다.
   const confirmed = ['sparrow', 'nilesoft', 'codemind', 'labradorlabs', 'infoline', 'codeone', 'haros'];
@@ -132,6 +132,8 @@ test('실제 설정: 업체별 식별번호 수 · 잠정 여부 · 별칭 분�
   // 납품요구 실응답(2026)에서 확인한 등록 상호. 정확 일치라 "(주)"가 없는 이름은 통과하지 못한다.
   assert.equal(hit('(주)코드원', '12345678').pass, true);
   assert.equal(hit('(주)하로스', '12345678').pass, true);
+  // 하로스의 ShellGuard 식별번호는 납품요구 실응답에서 확인해 목록에 넣었다(WO-20261028-19).
+  assert.deepEqual(hit('(주)하로스', '22752086'), { pass: true, companyId: 'haros', verified: true, idConflict: false });
   for (const name of ['정보라인', '코드원', '하로스']) assert.deepEqual(hit(name, '22849502'), { pass: false, rejected: 'company' }, name);
   // 레드펜소프트는 받은 식별번호가 없어 업체명만 통과하고 확인 대상 표시는 없다.
   assert.deepEqual(hit('레드펜소프트', '12345678'), { pass: true, companyId: 'redpen', verified: false, idConflict: false });
