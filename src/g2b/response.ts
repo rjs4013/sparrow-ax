@@ -74,8 +74,15 @@ export function parsePage(raw: unknown): Page {
 
   const body = lookup(response, 'body');
   if (!isObject(body)) return bad('body가 없습니다');
-  const items = lookup(body, 'items');
-  // 결과가 없으면 items 키 자체가 오지 않는다. 그 밖의 모양(빈 문자열, 객체 하나)은 받아들이지 않는다.
+  let items = lookup(body, 'items');
+  // 쇼핑몰 서비스는 items를 {item: 배열 또는 객체 하나}로 한 번 싸서 줄 수 있어 풀어 준다.
+  if (isObject(items)) {
+    const keys = Object.keys(items);
+    const inner = keys.length === 1 && keys[0]!.toLowerCase() === 'item' ? items[keys[0]!] : undefined;
+    if (Array.isArray(inner)) items = inner;
+    else if (isObject(inner)) items = [inner];
+  }
+  // 결과가 없으면 items 키 자체가 오지 않는다. 그 밖의 모양(빈 문자열, 그 외 객체)은 받아들이지 않는다.
   if (items !== undefined && !Array.isArray(items)) return bad('items가 배열이 아닙니다');
 
   return {

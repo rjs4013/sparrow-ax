@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { addDays, collectionRange, eachDay, todayKst } from './dates.ts';
+import { addDays, collectionRange, eachDay, todayKst, monthRanges, periodRange, shiftPeriod } from './dates.ts';
 
 test('마지막 성공일 다음 날부터 어제까지: 월요일 실행은 주말을 포함한다', () => {
   // 2026-10-23(금) 성공, 2026-10-26(월) 실행
@@ -57,4 +57,40 @@ test('마지막 성공일이 오늘보다 미래면 "수집할 날 없음"이 �
   assert.throws(() => collectionRange('2026-10-29', '2026-10-28'), /미래/);
   assert.throws(() => collectionRange('2027-01-01', '2026-10-28'), /미래/);
   assert.equal(collectionRange('2026-10-28', '2026-10-28'), null); // 오늘과 같으면 조용히 없음
+});
+
+test('monthRanges는 기간을 달력 월 조각으로 나눈다 (API 기간 상한 대응)', () => {
+  assert.deepEqual(monthRanges('2026-01-01', '2026-01-31'), [{ from: '2026-01-01', to: '2026-01-31' }]);
+  assert.deepEqual(monthRanges('2026-01-15', '2026-03-10'), [
+    { from: '2026-01-15', to: '2026-01-31' },
+    { from: '2026-02-01', to: '2026-02-28' },
+    { from: '2026-03-01', to: '2026-03-10' },
+  ]);
+  assert.deepEqual(monthRanges('2028-02-27', '2028-03-01'), [
+    { from: '2028-02-27', to: '2028-02-29' },
+    { from: '2028-03-01', to: '2028-03-01' },
+  ]);
+  assert.deepEqual(monthRanges('2026-12-30', '2027-01-02'), [
+    { from: '2026-12-30', to: '2026-12-31' },
+    { from: '2027-01-01', to: '2027-01-02' },
+  ]);
+  assert.deepEqual(monthRanges('2026-02-02', '2026-02-01'), []);
+});
+
+test('periodRange: 일 · 주(월~일) · 월', () => {
+  assert.deepEqual(periodRange('day', '2026-10-29'), { from: '2026-10-29', to: '2026-10-29' });
+  // 2026-10-29는 목요일
+  assert.deepEqual(periodRange('week', '2026-10-29'), { from: '2026-10-26', to: '2026-11-01' });
+  assert.deepEqual(periodRange('week', '2026-10-26'), { from: '2026-10-26', to: '2026-11-01' });
+  assert.deepEqual(periodRange('week', '2026-11-01'), { from: '2026-10-26', to: '2026-11-01' });
+  assert.deepEqual(periodRange('month', '2026-02-10'), { from: '2026-02-01', to: '2026-02-28' });
+  assert.deepEqual(periodRange('month', '2028-02-10'), { from: '2028-02-01', to: '2028-02-29' });
+});
+
+test('shiftPeriod: 이전 · 다음 기간으로 이동 (월은 말일 보정 없이 1일 기준)', () => {
+  assert.equal(shiftPeriod('day', '2026-10-29', -1), '2026-10-28');
+  assert.equal(shiftPeriod('week', '2026-10-29', 1), '2026-11-05');
+  assert.equal(shiftPeriod('month', '2026-03-31', -1), '2026-02-01');
+  assert.equal(shiftPeriod('month', '2026-12-15', 1), '2027-01-01');
+  assert.equal(shiftPeriod('month', '2026-01-15', -1), '2025-12-01');
 });

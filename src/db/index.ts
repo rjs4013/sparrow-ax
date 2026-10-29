@@ -8,7 +8,93 @@ export interface Migration {
 }
 
 // 테이블 스키마는 기능 지시서에서 정하고 여기에 추가한다. id는 정렬 가능한 문자열(예: '0001_init').
-export const migrations: Migration[] = [];
+export const migrations: Migration[] = [
+  {
+    id: '0001_contracts',
+    // 계약은 (통합계약번호, 업체 id)가 고유하다: 공동수급 계약은 9개사 중 둘 이상이 한 계약에 들어올 수 있다.
+    // 제품 식별번호 · 이름은 JSON 배열 문자열, 불리언은 0/1이다.
+    sql: `
+      CREATE TABLE contracts (
+        unty_no TEXT NOT NULL,
+        company_id TEXT NOT NULL,
+        company_name TEXT NOT NULL,
+        biz_no TEXT NOT NULL,
+        contract_name TEXT NOT NULL,
+        signed_date TEXT NOT NULL,
+        registered_at TEXT NOT NULL,
+        amount INTEGER,
+        contract_org TEXT NOT NULL,
+        demander_name TEXT NOT NULL,
+        demander_placeholder INTEGER NOT NULL,
+        method TEXT NOT NULL,
+        product_ids TEXT NOT NULL,
+        product_names TEXT NOT NULL,
+        verified INTEGER NOT NULL,
+        id_conflict INTEGER NOT NULL,
+        collected_at TEXT NOT NULL,
+        PRIMARY KEY (unty_no, company_id)
+      );
+      CREATE INDEX contracts_signed_date ON contracts (signed_date);
+      CREATE TABLE collect_runs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        started_at TEXT NOT NULL,
+        finished_at TEXT,
+        range_from TEXT NOT NULL,
+        range_to TEXT NOT NULL,
+        status TEXT NOT NULL,
+        fetched INTEGER NOT NULL DEFAULT 0,
+        matched INTEGER NOT NULL DEFAULT 0,
+        calls INTEGER NOT NULL DEFAULT 0,
+        error TEXT
+      );
+    `,
+  },
+  {
+    id: '0002_run_kind',
+    // 실행 종류: backfill(체결일자 백필), daily(등록일시 증분, 하루 1행), verify(체결일자 교차 검증). 기존 행은 백필이다.
+    sql: `
+      ALTER TABLE collect_runs ADD COLUMN kind TEXT NOT NULL DEFAULT 'backfill';
+      ALTER TABLE collect_runs ADD COLUMN note TEXT;
+    `,
+  },
+  {
+    id: '0003_delivery_requests',
+    // 나라장터쇼핑몰 납품요구 상세의 물품 행(우리 업체 것만). 변경 차수별 행을 모두 보관하고 조회가 가장 큰 차수만 고른다.
+    // 계약정보서비스의 계약과는 번호 체계가 달라 연결하지 않는다(독립 원천, WO-20261028-11).
+    sql: `
+      CREATE TABLE delivery_requests (
+        dlvr_req_no TEXT NOT NULL,
+        chg_ord INTEGER NOT NULL,
+        prdct_sno TEXT NOT NULL,
+        company_id TEXT NOT NULL,
+        company_name TEXT NOT NULL,
+        biz_no TEXT NOT NULL,
+        received_date TEXT NOT NULL,
+        demander_code TEXT NOT NULL,
+        demander_name TEXT NOT NULL,
+        demander_kind TEXT NOT NULL,
+        product_class_no TEXT NOT NULL,
+        product_class_name TEXT NOT NULL,
+        product_id TEXT NOT NULL,
+        product_name TEXT NOT NULL,
+        unit_price INTEGER,
+        qty INTEGER,
+        amount INTEGER,
+        deadline TEXT NOT NULL,
+        contract_no TEXT NOT NULL,
+        contract_style TEXT NOT NULL,
+        final_yn INTEGER NOT NULL,
+        incdec_qty INTEGER,
+        incdec_amt INTEGER,
+        verified INTEGER NOT NULL,
+        id_conflict INTEGER NOT NULL,
+        collected_at TEXT NOT NULL,
+        PRIMARY KEY (dlvr_req_no, chg_ord, prdct_sno, company_id)
+      );
+      CREATE INDEX delivery_requests_received_date ON delivery_requests (received_date);
+    `,
+  },
+];
 
 export function openDb(path: string): DatabaseSync {
   if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true });

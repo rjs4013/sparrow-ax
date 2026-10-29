@@ -10,7 +10,8 @@
     "build": "tsc --noEmit",
     "lint": "tsc --noEmit --noUnusedLocals --noUnusedParameters",
     "test": "node --test \"src/**/*.test.ts\"",
-    "start": "node --env-file-if-exists=.env src/web/main.ts"
+    "start": "node --env-file-if-exists=.env src/web/main.ts",
+    "collect": "node --env-file=.env src/collect/main.ts"
   },
   "dependencies": {
     "fastify": "^5.12.7"

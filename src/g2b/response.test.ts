@@ -68,7 +68,8 @@ test('예상하지 못한 모양은 조용히 받아들이지 않는다', () => 
   // items가 배열이 아니거나, 건수가 숫자가 아니거나, 항목에 중첩 값이 있는 경우
   for (const body of [
     { items: '', numOfRows: 1, pageNo: 1, totalCount: 0 },
-    { items: { item }, numOfRows: 1, pageNo: 1, totalCount: 1 },
+    { items: { item, extra: 1 }, numOfRows: 1, pageNo: 1, totalCount: 1 },
+    { items: { item: 'text' }, numOfRows: 1, pageNo: 1, totalCount: 1 },
     { items: [item], numOfRows: 1, pageNo: 1, totalCount: 'many' },
     { items: [{ a: { b: 1 } }], numOfRows: 1, pageNo: 1, totalCount: 1 },
     { items: [{ a: '1', A: '2' }], numOfRows: 1, pageNo: 1, totalCount: 1 },
@@ -126,4 +127,13 @@ test('"각 수요기관"(ZZ99999)은 실제 구매처가 아닌 자리표시자�
   // 코드가 바뀌어도 이름이 같으면 자리표시자다(둘 중 하나만 맞아도 실제 구매처로 취급하지 않는다).
   assert.equal(isPlaceholderDemander({ code: 'X', name: '각 수요기관', jurisdiction: '' }), true);
   assert.equal(isPlaceholderDemander({ code: 'ZZ99999', name: '', jurisdiction: '' }), true);
+});
+
+test('items가 {item: …}로 한 번 싸여 와도(쇼핑몰 서비스 형식) 배열 또는 객체 하나를 읽는다', () => {
+  const many = parsePage(ok({ items: { item: [item, { ...item, untyCntrctNo: 'R26TE00000002' }] }, numOfRows: 10, pageNo: 1, totalCount: 2 }));
+  assert.equal(many.items.length, 2);
+  const one = parsePage(ok({ items: { item }, numOfRows: 10, pageNo: 1, totalCount: 1 }));
+  assert.equal(one.items.length, 1);
+  assert.equal(field(one.items[0]!, 'untyCntrctNo'), 'R26TE00000001');
+  assert.deepEqual(parsePage(ok({ items: { item: [] }, numOfRows: 10, pageNo: 1, totalCount: 0 })).items, []);
 });
