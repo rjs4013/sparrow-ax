@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { createMatcher, loadMonitoringConfig, parseMonitoringConfig, type ContractRecord } from './contracts.ts';
 
-const CAT = '4323320501';
+const CAT = '43233205';
 const base = {
   categoryCodes: [CAT],
   companies: [
@@ -25,8 +25,10 @@ const rec = (over: Partial<ContractRecord> = {}): ContractRecord => ({
 });
 
 test('분류번호가 보안소프트웨어가 아니면, 업체명이 맞아도 제외한다 (1차)', () => {
-  assert.deepEqual(matcher.classify(rec({ categoryCode: '4323320502' })), { pass: false, rejected: 'category' });
-  assert.deepEqual(matcher.classify(rec({ categoryCode: '432332050' })), { pass: false, rejected: 'category' });
+  assert.deepEqual(matcher.classify(rec({ categoryCode: '43233206' })), { pass: false, rejected: 'category' });
+  // 이전에 쓰던 10자리 표기는 API의 8자리와 일치하지 않으므로 통과시키지 않는다.
+  assert.deepEqual(matcher.classify(rec({ categoryCode: '4323320501' })), { pass: false, rejected: 'category' });
+  assert.deepEqual(matcher.classify(rec({ categoryCode: '4323320' })), { pass: false, rejected: 'category' });
   assert.deepEqual(matcher.classify(rec({ categoryCode: '' })), { pass: false, rejected: 'category' });
 });
 
@@ -60,7 +62,8 @@ test('여러 업체에 걸친 식별번호는 업체명으로 판별하고 대�
 
 test('설정 검증: 분류번호 · 식별번호 자릿수, 중복, 빈 값을 거부한다', () => {
   const withCompany = (over: object) => ({ ...base, companies: [{ ...base.companies[0], ...over }] });
-  assert.throws(() => parseMonitoringConfig({ ...base, categoryCodes: ['123456789'] }), /10자리/);
+  assert.throws(() => parseMonitoringConfig({ ...base, categoryCodes: ['1234567'] }), /8자리/);
+  assert.throws(() => parseMonitoringConfig({ ...base, categoryCodes: ['4323320501'] }), /8자리/);
   assert.throws(() => parseMonitoringConfig({ ...base, categoryCodes: [] }), /categoryCodes/);
   assert.throws(() => parseMonitoringConfig(withCompany({ products: [{ id: '1234567', name: 'x' }] })), /8자리/);
   assert.throws(() => parseMonitoringConfig(withCompany({ products: [{ id: '11111111' }, { id: '11111111' }] })), /중복/);
@@ -72,9 +75,9 @@ test('설정 검증: 분류번호 · 식별번호 자릿수, 중복, 빈 값을 
   assert.throws(() => parseMonitoringConfig(null), /객체/);
 });
 
-test('실제 설정 파일: 9개사, 식별번호 58개, 분류번호 4323320501, 제외 업체 없음, 충돌 번호 4개', () => {
+test('실제 설정 파일: 9개사, 식별번호 58개, 분류번호 43233205, 제외 업체 없음, 충돌 번호 4개', () => {
   const config = loadMonitoringConfig();
-  assert.deepEqual(config.categoryCodes, ['4323320501']);
+  assert.deepEqual(config.categoryCodes, ['43233205']);
   assert.deepEqual(config.companies.map((c) => c.label).sort(), ['나일소프트', '래브라도랩스', '레드펜소프트', '스패로우', '에스에스알', '정보라인', '코드마인드', '코드원', '하로스']);
   assert.equal(config.companies.reduce((n, c) => n + c.products.length, 0), 58);
 
@@ -92,7 +95,7 @@ test('실제 설정 파일: 9개사, 식별번호 58개, 분류번호 4323320501
   assert.deepEqual(real.classify({ categoryCode: CAT, companyName: '주식회사 스패로우', productId: '26181128' }), {
     pass: true, companyId: 'sparrow', verified: true, idConflict: false,
   });
-  assert.deepEqual(real.classify({ categoryCode: CAT, companyName: '나일소프트', productId: '22849502' }), {
+  assert.deepEqual(real.classify({ categoryCode: CAT, companyName: '(주)나일소프트', productId: '22849502' }), {
     pass: true, companyId: 'nilesoft', verified: true, idConflict: true,
   });
   assert.equal(real.classify({ categoryCode: CAT, companyName: '싸이버텍', productId: '22835795' }).pass, false);
@@ -117,12 +120,14 @@ test('실제 설정: 업체별 식별번호 수 · 잠정 여부 · 별칭 분�
   assert.deepEqual(counts, {
     sparrow: 24, ssr: 9, infoline: 10, codemind: 5, haros: 1, nilesoft: 6, redpen: 0, codeone: 2, labradorlabs: 1,
   });
-  for (const c of config.companies) assert.equal(c.provisional, c.id !== 'sparrow', c.id);
+  // 실제 계약 응답으로 등록 상호를 확인한 업체만 provisional=false다. 에스에스알은 별칭(트리니티소프트)이 미확인이다.
+  const confirmed = ['sparrow', 'nilesoft', 'codemind', 'labradorlabs'];
+  for (const c of config.companies) assert.equal(c.provisional, !confirmed.includes(c.id), c.id);
 
   const real = createMatcher(config);
   const hit = (companyName: string, productId: string) => real.classify({ categoryCode: CAT, companyName, productId });
   assert.deepEqual(hit('트리니티소프트', '25613507'), { pass: true, companyId: 'ssr', verified: true, idConflict: false });
-  assert.deepEqual(hit('에스에스알', '22849502'), { pass: true, companyId: 'ssr', verified: true, idConflict: true });
+  assert.deepEqual(hit('(주)에스에스알', '22849502'), { pass: true, companyId: 'ssr', verified: true, idConflict: true });
   assert.deepEqual(hit('정보라인', '22849502'), { pass: true, companyId: 'infoline', verified: true, idConflict: true });
   // 레드펜소프트는 받은 식별번호가 없어 업체명만 통과하고 확인 대상 표시는 없다.
   assert.deepEqual(hit('레드펜소프트', '12345678'), { pass: true, companyId: 'redpen', verified: false, idConflict: false });
@@ -139,10 +144,33 @@ test('설정을 읽다 실패하면 오류 메시지에 파일 경로가 들어�
 
     const badShape = join(dir, 'shape.json');
     writeFileSync(badShape, JSON.stringify({ categoryCodes: ['123'], companies: [] }));
-    assert.throws(() => loadMonitoringConfig(badShape), (err: Error) => err.message.includes(badShape) && err.message.includes('10자리'));
+    assert.throws(() => loadMonitoringConfig(badShape), (err: Error) => err.message.includes(badShape) && err.message.includes('8자리'));
 
     assert.throws(() => loadMonitoringConfig(join(dir, 'missing.json')), (err: Error) => err.message.includes('missing.json'));
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('업체 판정과 분류번호 판정을 따로 호출할 수 있다 (업체는 기본 조회, 분류번호는 세부 조회에 있다)', () => {
+  assert.equal(matcher.matchCompany(' 주식회사 에이 '), 'a');
+  assert.equal(matcher.matchCompany('비코리아'), 'b');
+  assert.equal(matcher.matchCompany('주식회사 에이코리아'), undefined);
+  assert.equal(matcher.isMonitoredCategory(CAT), true);
+  assert.equal(matcher.isMonitoredCategory('4323320501'), false);
+  assert.deepEqual(matcher.checkProduct('a', '33333333'), { verified: true, idConflict: false });
+  assert.deepEqual(matcher.checkProduct('a', '11111111'), { verified: true, idConflict: true });
+  assert.deepEqual(matcher.checkProduct('a', '22222222'), { verified: false, idConflict: false });
+  assert.throws(() => matcher.checkProduct('없는업체', '33333333'), /업체/);
+});
+
+test('실제 설정: 응답에서 확인한 등록 상호로 정확 일치한다', () => {
+  const real = createMatcher(loadMonitoringConfig());
+  const expected: Record<string, string> = {
+    '주식회사 스패로우': 'sparrow', '(주)나일소프트': 'nilesoft', '코드마인드 주식회사': 'codemind',
+    '주식회사 래브라도랩스': 'labradorlabs', '(주)에스에스알': 'ssr', '트리니티소프트': 'ssr',
+  };
+  for (const [name, id] of Object.entries(expected)) assert.equal(real.matchCompany(name), id, name);
+  // 예전에 쓰던 짧은 잠정 표기는 실제 상호와 일치하지 않으므로 더 이상 통과시키지 않는다.
+  for (const short of ['나일소프트', '코드마인드', '래브라도랩스', '에스에스알']) assert.equal(real.matchCompany(short), undefined, short);
 });

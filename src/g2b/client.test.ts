@@ -5,13 +5,53 @@ import { createG2bClient, loadG2bConfig } from './client.ts';
 const KEY = 'SECRET%2Bkey';
 const config = { baseUrl: 'https://example.test/api', serviceKey: KEY };
 
-test('서비스키나 기본 URL이 없으면 명확한 오류를 낸다', () => {
-  assert.throws(() => loadG2bConfig({ G2B_BASE_URL: 'https://x' }), /G2B_SERVICE_KEY/);
-  assert.throws(() => loadG2bConfig({ G2B_SERVICE_KEY: 'k' }), /G2B_BASE_URL/);
-  assert.deepEqual(loadG2bConfig({ G2B_SERVICE_KEY: ' k ', G2B_BASE_URL: ' https://x ' }), {
+test('서비스별 변수를 읽고, 서비스키나 요청주소가 없으면 변수 이름을 알려 준다', () => {
+  assert.throws(() => loadG2bConfig({ G2B_CONTRACT_BASE_URL: 'https://x' }, 'CONTRACT'), /G2B_CONTRACT_SERVICE_KEY/);
+  assert.throws(() => loadG2bConfig({ G2B_CONTRACT_SERVICE_KEY: 'k' }, 'CONTRACT'), /G2B_CONTRACT_BASE_URL/);
+  assert.deepEqual(loadG2bConfig({ G2B_CONTRACT_SERVICE_KEY: ' k ', G2B_CONTRACT_BASE_URL: ' https://x ' }, 'CONTRACT'), {
     baseUrl: 'https://x',
     serviceKey: 'k',
   });
+  // 다른 서비스의 변수는 읽지 않는다.
+  const env = { G2B_CONTRACT_SERVICE_KEY: 'c', G2B_CONTRACT_BASE_URL: 'https://c', G2B_OPENSTD_SERVICE_KEY: 'o', G2B_OPENSTD_BASE_URL: 'https://o' };
+  assert.equal(loadG2bConfig(env, 'OPENSTD').serviceKey, 'o');
+  assert.equal(loadG2bConfig(env, 'CONTRACT').baseUrl, 'https://c');
+  assert.throws(() => loadG2bConfig({ G2B_CONTRACT_SERVICE_KEY: 'k', G2B_CONTRACT_BASE_URL: 'https://x' }, 'OPENSTD'), /G2B_OPENSTD_SERVICE_KEY/);
+});
+
+test('요청주소가 https가 아니거나 주소 형식이 아니면 거부한다 (서비스키가 쿼리스트링으로 가므로)', () => {
+  for (const url of ['http://apis.data.go.kr/x', 'ftp://x', 'apis.data.go.kr/x', '//x', 'not a url']) {
+    assert.throws(() => loadG2bConfig({ G2B_CONTRACT_SERVICE_KEY: 'k', G2B_CONTRACT_BASE_URL: url }, 'CONTRACT'), /https/, url);
+    assert.throws(() => createG2bClient({ baseUrl: url, serviceKey: 'k' }), /https/, url);
+  }
+});
+
+test('경로가 절대 주소여도 요청주소의 출처를 벗어나지 않는다 (https 강제 우회 방지)', () => {
+  const client = createG2bClient(config);
+  for (const path of ['http://evil.test/x', 'https://evil.test/x']) {
+    assert.throws(() => client.buildUrl(path), /출처/, path);
+  }
+});
+
+test('오류 메시지에 서비스키 값이 들어가지 않는다 (주소 오류)', () => {
+  const secret = 'SECRETVALUE';
+  assert.throws(() => loadG2bConfig({ G2B_CONTRACT_SERVICE_KEY: secret, G2B_CONTRACT_BASE_URL: 'http://x' }, 'CONTRACT'), (err: Error) => !err.message.includes(secret));
+});
+
+test('기본 호출은 리다이렉트를 따르지 않고 제한 시간을 둔다', async () => {
+  const original = globalThis.fetch;
+  let seen: RequestInit | undefined;
+  globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
+    seen = init;
+    return { ok: true, status: 200, json: async () => ({ ok: 1 }) };
+  }) as unknown as typeof fetch;
+  try {
+    assert.deepEqual(await createG2bClient(config).get('/getList'), { ok: 1 });
+  } finally {
+    globalThis.fetch = original;
+  }
+  assert.equal(seen?.redirect, 'error');
+  assert.ok(seen?.signal instanceof AbortSignal);
 });
 
 test('URL에 경로, 파라미터, 서비스키, json 타입이 붙는다', () => {
