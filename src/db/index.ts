@@ -131,6 +131,35 @@ export const migrations: Migration[] = [
       CREATE INDEX bid_notices_notice_date ON bid_notices (notice_date);
     `,
   },
+  {
+    id: '0006_bid_awards',
+    // 개방표준서비스 낙찰정보 중 공고명 키워드에 걸린 공고(투찰업체별 행을 공고 하나로 묶은 결과). (공고번호, 차수)가 고유하다.
+    // 입찰공고(bid_notices)와의 연결은 저장하지 않고 조회할 때 같은 키로 이어 붙인다. 대표자 · 담당자 · 연락처 · 주소는 저장하지 않는다.
+    sql: `
+      CREATE TABLE bid_awards (
+        bid_ntce_no TEXT NOT NULL,
+        bid_ntce_ord TEXT NOT NULL,
+        title TEXT NOT NULL,
+        work_kind TEXT NOT NULL,
+        demander_name TEXT NOT NULL,
+        demander_code TEXT NOT NULL,
+        est_price INTEGER,
+        reserve_price INTEGER,
+        base_amt INTEGER,
+        opening TEXT NOT NULL,
+        result TEXT NOT NULL,
+        bidder_count INTEGER NOT NULL,
+        winner_name TEXT NOT NULL,
+        winner_amt INTEGER,
+        winner_rate REAL,
+        winner_date TEXT NOT NULL,
+        keywords TEXT NOT NULL,
+        collected_at TEXT NOT NULL,
+        PRIMARY KEY (bid_ntce_no, bid_ntce_ord)
+      );
+      CREATE INDEX bid_awards_opening ON bid_awards (opening);
+    `,
+  },
 ];
 
 export function openDb(path: string): DatabaseSync {

@@ -19,7 +19,7 @@ const q = { from: '2026-06-01', to: '2026-06-30' };
 
 test('0003 마이그레이션이 delivery_requests 테이블을 만든다', () => {
   const db = openDb(':memory:');
-  assert.equal(migrate(db).length, 5);
+  assert.equal(migrate(db).length, 6);
   const tables = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all().map((r) => r['name']);
   assert.ok(tables.includes('delivery_requests'));
 });
