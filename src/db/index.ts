@@ -8,7 +8,48 @@ export interface Migration {
 }
 
 // 테이블 스키마는 기능 지시서에서 정하고 여기에 추가한다. id는 정렬 가능한 문자열(예: '0001_init').
-export const migrations: Migration[] = [];
+export const migrations: Migration[] = [
+  {
+    id: '0001_contracts',
+    // 계약은 (통합계약번호, 업체 id)가 고유하다: 공동수급 계약은 9개사 중 둘 이상이 한 계약에 들어올 수 있다.
+    // 제품 식별번호 · 이름은 JSON 배열 문자열, 불리언은 0/1이다.
+    sql: `
+      CREATE TABLE contracts (
+        unty_no TEXT NOT NULL,
+        company_id TEXT NOT NULL,
+        company_name TEXT NOT NULL,
+        biz_no TEXT NOT NULL,
+        contract_name TEXT NOT NULL,
+        signed_date TEXT NOT NULL,
+        registered_at TEXT NOT NULL,
+        amount INTEGER,
+        contract_org TEXT NOT NULL,
+        demander_name TEXT NOT NULL,
+        demander_placeholder INTEGER NOT NULL,
+        method TEXT NOT NULL,
+        product_ids TEXT NOT NULL,
+        product_names TEXT NOT NULL,
+        verified INTEGER NOT NULL,
+        id_conflict INTEGER NOT NULL,
+        collected_at TEXT NOT NULL,
+        PRIMARY KEY (unty_no, company_id)
+      );
+      CREATE INDEX contracts_signed_date ON contracts (signed_date);
+      CREATE TABLE collect_runs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        started_at TEXT NOT NULL,
+        finished_at TEXT,
+        range_from TEXT NOT NULL,
+        range_to TEXT NOT NULL,
+        status TEXT NOT NULL,
+        fetched INTEGER NOT NULL DEFAULT 0,
+        matched INTEGER NOT NULL DEFAULT 0,
+        calls INTEGER NOT NULL DEFAULT 0,
+        error TEXT
+      );
+    `,
+  },
+];
 
 export function openDb(path: string): DatabaseSync {
   if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true });

@@ -50,3 +50,40 @@ export function collectionRange(
   const from = lastSuccess === null ? (yearStart < yesterday ? yearStart : yesterday) : addDays(lastSuccess, 1);
   return from > yesterday ? null : { from, to: yesterday };
 }
+
+// 기간을 달력 월 조각으로 나눈다. 체결일자 검색(PPSSrch)은 기간이 길면(3개월) 거절되고 28~31일은 통과한다.
+export function monthRanges(from: IsoDate, to: IsoDate): { from: IsoDate; to: IsoDate }[] {
+  const ranges: { from: IsoDate; to: IsoDate }[] = [];
+  let start = from;
+  while (toUtcMs(start) <= toUtcMs(to)) {
+    const end = monthEnd(start);
+    ranges.push({ from: start, to: end < to ? end : to });
+    start = addDays(end, 1);
+  }
+  return ranges;
+}
+
+function monthEnd(date: IsoDate): IsoDate {
+  const [y, m] = [Number(date.slice(0, 4)), Number(date.slice(5, 7))];
+  return fromUtcMs(Date.UTC(y, m, 1) - 86_400_000);
+}
+
+export type PeriodView = 'day' | 'week' | 'month';
+
+// 화면의 조회 기간. 주는 월요일~일요일, 월은 1일~말일.
+export function periodRange(view: PeriodView, date: IsoDate): { from: IsoDate; to: IsoDate } {
+  if (view === 'day') return { from: date, to: date };
+  if (view === 'week') {
+    const from = addDays(date, -((new Date(toUtcMs(date)).getUTCDay() + 6) % 7));
+    return { from, to: addDays(from, 6) };
+  }
+  return { from: `${date.slice(0, 7)}-01`, to: monthEnd(date) };
+}
+
+// 이전(-1) · 다음(1) 기간의 기준일. 월은 항상 그 달 1일을 돌려준다.
+export function shiftPeriod(view: PeriodView, date: IsoDate, direction: -1 | 1): IsoDate {
+  if (view === 'day') return addDays(date, direction);
+  if (view === 'week') return addDays(date, 7 * direction);
+  const first = `${date.slice(0, 7)}-01`;
+  return direction === 1 ? addDays(monthEnd(first), 1) : `${addDays(first, -1).slice(0, 7)}-01`;
+}
