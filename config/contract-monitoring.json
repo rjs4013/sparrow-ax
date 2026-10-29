@@ -1,6 +1,6 @@
 {
   "categoryCodes": [
-    "4323320501"
+    "43233205"
   ],
   "companies": [
     {
@@ -113,7 +113,7 @@
       "id": "ssr",
       "label": "에스에스알",
       "matchNames": [
-        "에스에스알",
+        "(주)에스에스알",
         "트리니티소프트"
       ],
       "provisional": true,
@@ -210,9 +210,9 @@
       "id": "codemind",
       "label": "코드마인드",
       "matchNames": [
-        "코드마인드"
+        "코드마인드 주식회사"
       ],
-      "provisional": true,
+      "provisional": false,
       "products": [
         {
           "id": "23238176",
@@ -254,9 +254,9 @@
       "id": "nilesoft",
       "label": "나일소프트",
       "matchNames": [
-        "나일소프트"
+        "(주)나일소프트"
       ],
-      "provisional": true,
+      "provisional": false,
       "products": [
         {
           "id": "22300118",
@@ -315,9 +315,9 @@
       "id": "labradorlabs",
       "label": "래브라도랩스",
       "matchNames": [
-        "래브라도랩스"
+        "주식회사 래브라도랩스"
       ],
-      "provisional": true,
+      "provisional": false,
       "products": [
         {
           "id": "25160977",

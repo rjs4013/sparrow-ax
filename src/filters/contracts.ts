@@ -40,6 +40,10 @@ export type Classification =
     };
 
 export interface Matcher {
+  // 업체(기본 조회 응답)와 분류번호 · 식별번호(세부 조회 응답)는 서로 다른 오퍼레이션에 있어 따로 판정할 수 있다.
+  matchCompany(name: string): string | undefined;
+  isMonitoredCategory(code: string): boolean;
+  checkProduct(companyId: string, productId: string): { verified: boolean; idConflict: boolean };
   classify(record: ContractRecord): Classification;
   // 여러 업체에 걸친 식별번호들 (정렬됨).
   conflictIds: string[];
@@ -56,7 +60,7 @@ export function parseMonitoringConfig(raw: unknown): MonitoringConfig {
   const { categoryCodes, companies } = raw as Record<string, unknown>;
 
   if (!Array.isArray(categoryCodes) || categoryCodes.length === 0) fail('categoryCodes가 비어 있습니다');
-  for (const c of categoryCodes) if (!isString(c) || !/^\d{10}$/.test(c)) fail(`물품분류번호는 10자리 숫자여야 합니다: ${String(c)}`);
+  for (const c of categoryCodes) if (!isString(c) || !/^\d{8}$/.test(c)) fail(`물품분류번호는 8자리 숫자여야 합니다: ${String(c)}`);
 
   if (!Array.isArray(companies) || companies.length === 0) fail('companies가 비어 있습니다');
   const ids = new Set<string>();
@@ -121,14 +125,24 @@ export function createMatcher(config: MonitoringConfig): Matcher {
   const conflictIds = [...owners].filter(([, o]) => o.size > 1).map(([id]) => id).sort();
   const conflicts = new Set(conflictIds);
 
-  return {
+  const byId = new Map(config.companies.map((c) => [c.id, c]));
+
+  const matcher: Matcher = {
     conflictIds,
+    matchCompany: (name) => byName.get(name.trim())?.id,
+    isMonitoredCategory: (code) => categories.has(code),
+    checkProduct(companyId, productId) {
+      const company = byId.get(companyId);
+      if (!company) throw new Error(`알 수 없는 업체 id입니다: ${companyId}`);
+      const verified = company.products.some((p) => p.id === productId);
+      return { verified, idConflict: verified && conflicts.has(productId) };
+    },
     classify(record) {
-      if (!categories.has(record.categoryCode)) return { pass: false, rejected: 'category' };
-      const company = byName.get(record.companyName.trim());
-      if (!company) return { pass: false, rejected: 'company' };
-      const verified = company.products.some((p) => p.id === record.productId);
-      return { pass: true, companyId: company.id, verified, idConflict: verified && conflicts.has(record.productId) };
+      if (!matcher.isMonitoredCategory(record.categoryCode)) return { pass: false, rejected: 'category' };
+      const companyId = matcher.matchCompany(record.companyName);
+      if (companyId === undefined) return { pass: false, rejected: 'company' };
+      return { pass: true, companyId, ...matcher.checkProduct(companyId, record.productId) };
     },
   };
+  return matcher;
 }
