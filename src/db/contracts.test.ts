@@ -18,7 +18,7 @@ const fresh = () => {
 
 test('마이그레이션이 계약 · 수집 실행 테이블을 만들고 두 번 돌려도 안전하다', () => {
   const db = openDb(':memory:');
-  assert.equal(migrate(db).length, 4);
+  assert.equal(migrate(db).length, 5);
   assert.deepEqual(migrate(db), []);
   const tables = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all().map((r) => r['name']);
   assert.ok(tables.includes('contracts') && tables.includes('collect_runs'));

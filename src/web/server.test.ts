@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { finishRun, startRun, upsertContracts, type ContractRow } from '../db/contracts.ts';
+import { upsertBids, type BidRow } from '../db/bids.ts';
 import { upsertDeliveries, type DeliveryRow } from '../db/deliveries.ts';
 import ExcelJS from 'exceljs';
 import { migrate, openDb } from '../db/index.ts';
@@ -344,4 +345,118 @@ test('엑셀: 업체 이름의 따옴표 · 괄호 · 개행이 있어도 헤더
   const star = header.split("filename*=UTF-8''")[1]!;
   assert.ok(!/['()*]/.test(star), star);
   assert.equal(decodeURIComponent(star), "경쟁사_실적_2026-06_a'b(c)___d.xlsx");
+});
+
+// ---- 입찰공고 화면 ----
+const bRow = (over: Partial<BidRow> = {}): BidRow => ({
+  bidNtceNo: 'R26BK01000001', bidNtceOrd: '000', title: '소스코드 보안약점 진단 용역', status: '일반공고', workKind: '용역',
+  noticeDate: '2026-10-27', noticeTime: '09:30', demanderName: '한국정보보호진흥원', demanderCode: '1234567', noticeOrgName: '한국정보보호진흥원',
+  noticeOrgCode: '1234567', estimatedPrice: 90_000_000, budgetAmount: 99_000_000, bidBegin: '2026-10-27 09:30', regClose: '2026-11-03 17:00',
+  bidClose: '2026-11-05 10:00', opening: '2026-11-05 11:00', url: 'https://www.g2b.go.kr/x?bidno=R26BK01000001', contractMethod: '제한경쟁',
+  keywords: ['소스코드', '보안약점'], ...over,
+});
+
+function setupB(rows: BidRow[] = []) {
+  const db = openDb(':memory:');
+  migrate(db);
+  upsertBids(db, rows, '2026-10-29T00:00:00Z');
+  const app = buildServer({ db, companies, today: () => '2026-10-29', keywords: ['소스코드', '보안약점', '솔루션'] });
+  return { db, app, get: (url: string) => app.inject({ method: 'GET', url }) };
+}
+
+test('입찰공고 화면: 공고명 · 수요처 · 추정가격 · 입찰일 · 등록마감 · 투찰마감 · 개찰 · 공고 링크를 보여 준다', async () => {
+  const { get } = setupB([bRow(), bRow({ bidNtceNo: 'OLD', noticeDate: '2026-09-30', title: '지난달 공고' })]);
+  const res = await get('/bids');
+  assert.equal(res.statusCode, 200);
+  assert.match(res.headers['content-type'] as string, /text\/html/);
+  const body = res.body;
+  assert.match(body, /소스코드 보안약점 진단 용역/);
+  assert.match(body, /한국정보보호진흥원/);
+  assert.match(body, /90,000,000/);
+  assert.match(body, /배정예산 99,000,000/);
+  assert.match(body, /2026-10-27 09:30/);
+  assert.match(body, /2026-11-03 17:00/);
+  assert.match(body, /2026-11-05 10:00/);
+  assert.match(body, /href="https:\/\/www\.g2b\.go\.kr\/x\?bidno=R26BK01000001" target="_blank" rel="noopener noreferrer">공고 보기/);
+  assert.match(body, /2026-10-01 ~ 2026-10-31/);
+  assert.doesNotMatch(body, /지난달 공고/);
+});
+
+test('입찰공고 화면: 수요기관 · 키워드 · 일/주 기간으로 거르고 요약을 보여 준다', async () => {
+  const { get } = setupB([
+    bRow({ bidNtceNo: 'A', noticeDate: '2026-10-29', demanderName: '가 기관', title: '가 공고', keywords: ['솔루션'] }),
+    bRow({ bidNtceNo: 'B', noticeDate: '2026-10-27', demanderName: '나 기관', title: '나 공고', keywords: ['소스코드'] }),
+    bRow({ bidNtceNo: 'C', noticeDate: '2026-10-05', demanderName: '가 기관', title: '다 공고', keywords: ['소스코드'] }),
+  ]);
+  const month = (await get('/bids?view=month&date=2026-10-29')).body;
+  assert.match(month, /3건 · 수요기관 2곳/);
+  const day = (await get('/bids?view=day&date=2026-10-29')).body;
+  assert.match(day, /가 공고/);
+  assert.doesNotMatch(day, /나 공고/);
+  const week = (await get('/bids?view=week&date=2026-10-29')).body;
+  assert.match(week, /가 공고/);
+  assert.match(week, /나 공고/);
+  assert.doesNotMatch(week, /다 공고/);
+  const org = (await get('/bids?date=2026-10-29&demander=' + encodeURIComponent('가 기관'))).body;
+  assert.match(org, /가 공고/);
+  assert.match(org, /다 공고/);
+  assert.doesNotMatch(org, /나 공고/);
+  const kw = (await get('/bids?date=2026-10-29&keyword=' + encodeURIComponent('솔루션'))).body;
+  assert.match(kw, /가 공고/);
+  assert.doesNotMatch(kw, /나 공고/);
+  // 수요기관 선택지는 그 기간에 나온 기관, 키워드 선택지는 설정의 키워드다.
+  assert.match(month, /<option value="나 기관">/);
+  assert.match(month, /<option value="솔루션">/);
+});
+
+test('입찰공고 화면: 상태 · 업무구분 · 키워드 표시, 링크는 http(s)만 링크로 만든다', async () => {
+  const { get } = setupB([
+    bRow({ bidNtceNo: 'S', status: '정정공고', bidNtceOrd: '001' }),
+    bRow({ bidNtceNo: 'T', status: '취소공고' }),
+    bRow({ bidNtceNo: 'J', url: 'javascript:alert(1)' }),
+    bRow({ bidNtceNo: 'N', url: '', estimatedPrice: null, budgetAmount: null, regClose: '' }),
+  ]);
+  const body = (await get('/bids')).body;
+  assert.match(body, /정정공고/);
+  assert.match(body, /취소공고/);
+  assert.match(body, /차수 001/);
+  assert.match(body, /용역/);
+  assert.match(body, /소스코드/);
+  assert.doesNotMatch(body, /href="javascript:/);
+  assert.doesNotMatch(body, /javascript:alert/);
+});
+
+test('입찰공고 화면: 데이터의 HTML은 이스케이프되고, 빈 상태 · 수집 상태 · 잘못된 조건 처리', async () => {
+  const xss = setupB([bRow({ title: '<script>alert(1)</script>', demanderName: '<img src=x onerror=alert(2)>' })]);
+  const body = (await xss.get('/bids')).body;
+  assert.doesNotMatch(body, /<script>alert\(1\)/);
+  assert.doesNotMatch(body, /<img src=x/);
+  assert.match(body, /&lt;script&gt;/);
+
+  const { db, get } = setupB();
+  assert.match((await get('/bids')).body, /해당 기간에 수집된 입찰공고가 없습니다/);
+  assert.match((await get('/bids')).body, /입찰공고 수집 기록이 없습니다/);
+  const r = startRun(db, '2026-10-28', '2026-10-28', '2026-10-29T00:00:00Z', 'bid_daily');
+  finishRun(db, r, { status: 'success', fetched: 1906, matched: 7, calls: 4, error: null }, '2026-10-29T00:01:00Z');
+  const status = (await get('/bids')).body;
+  assert.match(status, /입찰공고 매일/);
+  assert.match(status, /수신 1906건 · 키워드 적중 7건 저장/);
+  for (const url of ['/bids?view=year', '/bids?date=abc', '/bids?keyword=nope', '/bids?demander=' + 'x'.repeat(201)]) assert.equal((await get(url)).statusCode, 400, url);
+});
+
+test('세 화면은 서로 이동하는 링크를 갖고, 입찰공고 화면에는 엑셀 링크가 없다', async () => {
+  const { get } = setupB();
+  for (const url of ['/', '/deliveries', '/bids']) {
+    const body = (await get(url)).body;
+    assert.match(body, /href="\/bids\?view=month&amp;date=2026-10-29"[^>]*>입찰공고/);
+    assert.match(body, /href="\/\?view=month&amp;date=2026-10-29"[^>]*>계약/);
+  }
+  assert.doesNotMatch((await get('/bids')).body, /export\.xlsx/);
+});
+
+test('입찰공고 화면: 고른 수요기관이 그 기간에 없어도 선택 상자에 남는다 (기간 이동 후 조건이 조용히 바뀌지 않게)', async () => {
+  const { get } = setupB([bRow({ demanderName: '가 기관' })]);
+  const body = (await get('/bids?date=2026-12-01&demander=' + encodeURIComponent('가 기관'))).body;
+  assert.match(body, /<option value="가 기관" selected>/);
+  assert.match(body, /0건/);
 });

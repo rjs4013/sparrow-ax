@@ -3,6 +3,7 @@ import type { Matcher } from '../filters/contracts.ts';
 import { monthRanges, type IsoDate } from '../filters/dates.ts';
 import { field, G2bResponseError } from '../g2b/response.ts';
 import { fetchAll, PRODUCT_NAME, type FetchPage } from './contracts.ts';
+import { toNumber } from './format.ts';
 
 // 나라장터쇼핑몰 납품요구 상세. 한 쪽 최대 999행, 접수일자 구간은 한 달까지 확인했다 (WO-20261028-11).
 const OP = 'getDlvrReqDtlInfoList';
@@ -15,12 +16,6 @@ export interface DeliveryStats {
 }
 
 const compact = (d: IsoDate) => d.replaceAll('-', '');
-
-function toNumber(text: string): number | null {
-  const s = text.replaceAll(',', '').trim();
-  const n = s === '' ? NaN : Number(s);
-  return Number.isFinite(n) ? n : null;
-}
 
 const format = (message: string): never => {
   throw new G2bResponseError(`나라장터 응답 형식 오류: ${message}`);

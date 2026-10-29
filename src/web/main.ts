@@ -1,4 +1,5 @@
 import { migrate, openDb } from '../db/index.ts';
+import { loadBidConfig } from '../filters/bids.ts';
 import { loadMonitoringConfig } from '../filters/contracts.ts';
 import { buildServer } from './server.ts';
 
@@ -17,5 +18,5 @@ if (!Number.isInteger(port) || port < 1 || port > 65535) {
 if (!['127.0.0.1', '::1', 'localhost'].includes(host)) {
   console.warn(`경고: 인증 없는 웹 서버를 ${host}에 엽니다. 사내망에서만 접근 가능한지 확인하세요.`);
 }
-const address = await buildServer({ db, companies, categoryCode: config.categoryCodes.join(', ') }).listen({ host, port });
+const address = await buildServer({ db, companies, categoryCode: config.categoryCodes.join(', '), keywords: loadBidConfig().keywords }).listen({ host, port });
 console.log(`sparrow-ax 웹 서버 시작: ${address}`);

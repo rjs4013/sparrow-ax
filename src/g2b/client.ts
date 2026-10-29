@@ -1,6 +1,8 @@
 export interface G2bConfig {
   baseUrl: string;
   serviceKey: string;
+  // 서비스키를 보내는 쿼리 이름. 생략하면 serviceKey(계약정보 · 쇼핑몰에서 확인됨).
+  keyParam?: string;
 }
 
 // 포털에서 서비스마다 키를 따로 받으므로 변수도 서비스별이다 (G2B_{서비스}_SERVICE_KEY, G2B_{서비스}_BASE_URL).
@@ -26,7 +28,8 @@ export function loadG2bConfig(env: Record<string, string | undefined>, service: 
   if (!serviceKey) throw new Error(`${keyVar}가 설정되지 않았습니다 (.env 확인)`);
   if (!baseUrl) throw new Error(`${urlVar}가 설정되지 않았습니다 (.env 확인)`);
   requireHttps(baseUrl);
-  return { baseUrl, serviceKey };
+  // 개방표준서비스는 가이드의 이름(ServiceKey)만 확인됐다 (WO-20261028-07).
+  return service === 'OPENSTD' ? { baseUrl, serviceKey, keyParam: 'ServiceKey' } : { baseUrl, serviceKey };
 }
 
 export type FetchLike = (url: string) => Promise<{ ok: boolean; status: number; json(): Promise<unknown> }>;
@@ -50,7 +53,7 @@ export function createG2bClient(config: G2bConfig, fetchImpl: FetchLike = defaul
   function build(path: string, params: Record<string, string | number>, key: string): string {
     const url = new URL(path.replace(/^\//, ''), config.baseUrl.replace(/\/?$/, '/'));
     for (const [k, v] of Object.entries(params)) url.searchParams.set(k, String(v));
-    url.searchParams.set('serviceKey', key);
+    url.searchParams.set(config.keyParam ?? 'serviceKey', key);
     url.searchParams.set('type', 'json');
     // path가 절대 주소면 baseUrl이 무시되어 키가 다른 곳으로 가므로, 결과 주소가 baseUrl의 출처와 같은지 다시 확인한다.
     if (url.origin !== new URL(config.baseUrl).origin) throw new Error('요청 경로가 요청주소의 출처를 벗어났습니다');

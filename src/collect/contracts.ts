@@ -49,14 +49,19 @@ export function createFetcher(
   return { fetchPage, calls: () => calls };
 }
 
-export async function fetchAll(fetchPage: FetchPage, op: string, params: Params): Promise<Row[]> {
+// 모든 쪽을 받아 행과 서비스가 알려 준 전체 건수(totalCount)를 돌려준다.
+export async function fetchAllPages(fetchPage: FetchPage, op: string, params: Params): Promise<{ rows: Row[]; totalCount: number }> {
   const rows: Row[] = [];
   for (let pageNo = 1; pageNo <= MAX_PAGES; pageNo++) {
     const page = await fetchPage(op, { ...params, pageNo });
     rows.push(...page.items);
-    if (page.items.length === 0 || rows.length >= page.totalCount) return rows;
+    if (page.items.length === 0 || rows.length >= page.totalCount) return { rows, totalCount: page.totalCount };
   }
   throw new Error(`${op}: 페이지가 ${MAX_PAGES}개를 넘어 중단합니다`);
+}
+
+export async function fetchAll(fetchPage: FetchPage, op: string, params: Params): Promise<Row[]> {
+  return (await fetchAllPages(fetchPage, op, params)).rows;
 }
 
 export interface CollectStats {

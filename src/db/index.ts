@@ -99,6 +99,38 @@ export const migrations: Migration[] = [
     // 납품요구건명(요구사항의 "공사명"). 이미 저장된 행은 빈 값이고 납품요구 백필을 다시 돌리면 채워진다.
     sql: "ALTER TABLE delivery_requests ADD COLUMN dlvr_req_nm TEXT NOT NULL DEFAULT ''",
   },
+  {
+    id: '0005_bid_notices',
+    // 개방표준서비스 입찰공고 중 공고명 키워드에 걸린 것. (공고번호, 차수)가 고유하고 정정 · 재공고는 차수가 다른 행이다.
+    // 일시는 'YYYY-MM-DD HH:MM' 문자열(없으면 빈 문자열), 키워드는 JSON 배열 문자열이다. 담당자 정보는 저장하지 않는다.
+    sql: `
+      CREATE TABLE bid_notices (
+        bid_ntce_no TEXT NOT NULL,
+        bid_ntce_ord TEXT NOT NULL,
+        title TEXT NOT NULL,
+        status TEXT NOT NULL,
+        work_kind TEXT NOT NULL,
+        notice_date TEXT NOT NULL,
+        notice_time TEXT NOT NULL,
+        demander_name TEXT NOT NULL,
+        demander_code TEXT NOT NULL,
+        notice_org_name TEXT NOT NULL,
+        notice_org_code TEXT NOT NULL,
+        est_price INTEGER,
+        budget_amt INTEGER,
+        bid_begin TEXT NOT NULL,
+        reg_close TEXT NOT NULL,
+        bid_close TEXT NOT NULL,
+        opening TEXT NOT NULL,
+        url TEXT NOT NULL,
+        contract_method TEXT NOT NULL,
+        keywords TEXT NOT NULL,
+        collected_at TEXT NOT NULL,
+        PRIMARY KEY (bid_ntce_no, bid_ntce_ord)
+      );
+      CREATE INDEX bid_notices_notice_date ON bid_notices (notice_date);
+    `,
+  },
 ];
 
 export function openDb(path: string): DatabaseSync {

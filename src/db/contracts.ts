@@ -76,8 +76,8 @@ export function listContracts(db: DatabaseSync, q: { from: string; to: string; c
   }));
 }
 
-// backfill · daily · verify는 계약정보(계약), dlvr_backfill · dlvr_daily는 쇼핑몰 납품요구 수집이다.
-export type RunKind = 'backfill' | 'daily' | 'verify' | 'dlvr_backfill' | 'dlvr_daily';
+// backfill · daily · verify는 계약정보(계약), dlvr_backfill · dlvr_daily는 쇼핑몰 납품요구, bid_daily는 개방표준 입찰공고 수집이다.
+export type RunKind = 'backfill' | 'daily' | 'verify' | 'dlvr_backfill' | 'dlvr_daily' | 'bid_daily';
 
 export interface RunRecord {
   id: number;
