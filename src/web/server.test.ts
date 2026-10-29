@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { finishRun, startRun, upsertContracts, type ContractRow } from '../db/contracts.ts';
+import { upsertDeliveries, type DeliveryRow } from '../db/deliveries.ts';
 import { migrate, openDb } from '../db/index.ts';
 import { buildServer } from './server.ts';
 
@@ -168,4 +169,100 @@ test('수집 상태는 매일 증분 · 교차 검증 · 백필을 각각 보여
   assert.match(body, /새로 찾은 계약 1건/);
   assert.match(body, /호출 7회/);
   assert.ok(body.indexOf('매일 증분') < body.indexOf('교차 검증') && body.indexOf('교차 검증') < body.indexOf('백필'));
+});
+
+// ---- 납품요구 화면 ----
+const dRow = (over: Partial<DeliveryRow> = {}): DeliveryRow => ({
+  dlvrReqNo: 'R26TB01997234', chgOrd: 0, prdctSno: '1', companyId: 'nilesoft', companyName: '(주)나일소프트', bizNo: '1234567890',
+  receivedDate: '2026-06-08', demanderCode: '1790364', demanderName: '고위공직자범죄수사처', demanderKind: '중앙행정기관',
+  productClassNo: '43233205', productClassName: '트랜잭션보안및바이러스보호소프트웨어', productId: '24590125', productName: '웹방화벽',
+  unitPrice: 45_500_000, qty: 2, amount: 91_000_000, deadline: '2026-07-08', contractNo: '002461624', contractStyle: '제3자단가계약',
+  finalYn: true, incdecQty: 2, incdecAmt: 91_000_000, verified: false, idConflict: false, ...over,
+});
+
+function setupD(rows: DeliveryRow[] = []) {
+  const db = openDb(':memory:');
+  migrate(db);
+  upsertDeliveries(db, rows, '2026-10-29T00:00:00Z');
+  const app = buildServer({ db, companies, today: () => '2026-06-15' });
+  return { db, app, get: (url: string) => app.inject({ method: 'GET', url }) };
+}
+
+test('납품요구 화면: 접수일자 기준으로 수요기관 · 물품 · 수량 · 금액을 보여 준다', async () => {
+  const { get } = setupD([dRow(), dRow({ dlvrReqNo: 'OLD', receivedDate: '2026-05-31', demanderName: '지난달 기관' })]);
+  const res = await get('/deliveries');
+  assert.equal(res.statusCode, 200);
+  assert.match(res.headers['content-type'] as string, /text\/html/);
+  assert.match(res.body, /고위공직자범죄수사처/);
+  assert.match(res.body, /\(주\)나일소프트/);
+  assert.match(res.body, /24590125/);
+  assert.match(res.body, /웹방화벽/);
+  assert.match(res.body, /91,000,000/);
+  assert.match(res.body, /45,500,000/);
+  assert.match(res.body, /2026-06-01 ~ 2026-06-30/);
+  assert.doesNotMatch(res.body, /지난달 기관/);
+});
+
+test('납품요구 화면: 일 · 주 · 업체로 거르고 건수 · 수요기관 수 · 금액 합계를 보여 준다', async () => {
+  const { get } = setupD([
+    dRow({ dlvrReqNo: 'A', receivedDate: '2026-06-15', amount: 100, demanderCode: '111', demanderName: '가 기관' }),
+    dRow({ dlvrReqNo: 'A', prdctSno: '2', receivedDate: '2026-06-15', amount: 50, demanderCode: '111', demanderName: '가 기관' }),
+    dRow({ dlvrReqNo: 'B', receivedDate: '2026-06-10', amount: 10, companyId: 'sparrow', companyName: '주식회사 스패로우', demanderCode: '222', demanderName: '나 기관' }),
+  ]);
+  const month = (await get('/deliveries?view=month&date=2026-06-15')).body;
+  assert.match(month, /3행 · 납품요구 2건 · 수요기관 2곳 · 합계 160원/);
+  const day = (await get('/deliveries?view=day&date=2026-06-15')).body;
+  assert.match(day, /2행 · 납품요구 1건 · 수요기관 1곳 · 합계 150원/);
+  const company = (await get('/deliveries?view=month&date=2026-06-15&company=sparrow')).body;
+  assert.match(company, /1행/);
+  assert.doesNotMatch(company, /가 기관/);
+});
+
+test('납품요구 화면: 확인 대상 · 목록 밖 · 대조 필요 · 최종 아님 · 변경 차수 표시', async () => {
+  const { get } = setupD([
+    dRow({ dlvrReqNo: 'V', verified: true }),
+    dRow({ dlvrReqNo: 'X', verified: true, idConflict: true }),
+    dRow({ dlvrReqNo: 'N', verified: false }),
+    dRow({ dlvrReqNo: 'F', finalYn: false, chgOrd: 2 }),
+    dRow({ dlvrReqNo: 'C', chgOrd: 1, qty: 0, amount: 0, incdecQty: -2, incdecAmt: -91_000_000 }),
+    dRow({ dlvrReqNo: 'E', productId: '', productName: '' }),
+  ]);
+  const body = (await get('/deliveries')).body;
+  assert.match(body, /확인 대상/);
+  assert.match(body, /대조 필요/);
+  assert.match(body, /목록 밖/);
+  assert.match(body, /최종 아님/);
+  assert.match(body, /변경 2차/);
+  assert.match(body, /취소\(수량 0\)/);
+  assert.match(body, /제품 정보 없음/);
+});
+
+test('납품요구 화면: 데이터의 HTML은 이스케이프되고, 빈 상태 · 수집 상태 · 잘못된 조건 처리', async () => {
+  const xss = setupD([dRow({ demanderName: '<script>alert(1)</script>', productName: '<img src=x onerror=alert(2)>' })]);
+  const body = (await xss.get('/deliveries')).body;
+  assert.doesNotMatch(body, /<script>alert\(1\)/);
+  assert.doesNotMatch(body, /<img src=x/);
+  assert.match(body, /&lt;script&gt;/);
+
+  const { db, get } = setupD();
+  assert.match((await get('/deliveries')).body, /해당 기간에 수집된 납품요구가 없습니다/);
+  assert.match((await get('/deliveries')).body, /납품요구 수집 기록이 없습니다/);
+  const r = startRun(db, '2026-01-01', '2026-10-28', '2026-10-29T00:00:00Z', 'dlvr_backfill');
+  finishRun(db, r, { status: 'success', fetched: 1288, matched: 13, calls: 2, error: null }, '2026-10-29T00:01:00Z');
+  const status = (await get('/deliveries')).body;
+  assert.match(status, /납품요구 백필/);
+  assert.match(status, /납품요구 13행 저장/);
+  for (const url of ['/deliveries?view=year', '/deliveries?date=abc', '/deliveries?company=nope']) assert.equal((await get(url)).statusCode, 400, url);
+});
+
+test('두 화면은 서로 이동하는 링크를 갖고, 각 화면은 자기 수집 상태만 보여 준다', async () => {
+  const { db, get } = setupD();
+  const b = startRun(db, '2026-01-01', '2026-10-28', '2026-10-29T00:00:00Z', 'backfill');
+  finishRun(db, b, { status: 'success', fetched: 423, matched: 11, calls: 21, error: null }, '2026-10-29T00:01:00Z');
+  const contracts = (await get('/?view=month&date=2026-06-15&company=sparrow')).body;
+  assert.match(contracts, /href="\/deliveries\?view=month&amp;date=2026-06-15&amp;company=sparrow"/);
+  assert.match(contracts, /백필\(체결일자\)/);
+  const deliveries = (await get('/deliveries?view=month&date=2026-06-15')).body;
+  assert.match(deliveries, /href="\/\?view=month&amp;date=2026-06-15"/);
+  assert.doesNotMatch(deliveries, /백필\(체결일자\)/);
 });

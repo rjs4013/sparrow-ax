@@ -49,7 +49,7 @@ export function createFetcher(
   return { fetchPage, calls: () => calls };
 }
 
-async function fetchAll(fetchPage: FetchPage, op: string, params: Params): Promise<Row[]> {
+export async function fetchAll(fetchPage: FetchPage, op: string, params: Params): Promise<Row[]> {
   const rows: Row[] = [];
   for (let pageNo = 1; pageNo <= MAX_PAGES; pageNo++) {
     const page = await fetchPage(op, { ...params, pageNo });

@@ -2,13 +2,15 @@
 //   백필(처음 한 번, 체결일자 방식):  npm run collect -- --mode backfill --from 2026-01-01 --to 2026-10-28
 //   매일 증분(등록일시 방식, 매일 새벽):  npm run collect -- --mode daily [--from 2026-10-27]  (--from: 그 날부터 다시 받음)
 //   교차 검증(주 1회, 체결일자 방식):    npm run collect -- --mode verify [--days 14]
-// 호출 횟수는 --max-calls로 제한한다(기본: 백필 40, 매일 80, 교차 검증 40).
+//   납품요구(쇼핑몰, 실제 수요기관 · 금액) 백필:  npm run collect -- --mode dlvr-backfill --from 2026-01-01 --to 2026-10-28
+//   납품요구 매일(접수일자 방식):             npm run collect -- --mode dlvr-daily
+// 호출 횟수는 --max-calls로 제한한다(기본: 백필 40, 매일 80, 교차 검증 40, 납품요구 백필 40, 납품요구 매일 20).
 import { parseArgs } from 'node:util';
 import { openDb, migrate } from '../db/index.ts';
 import { createMatcher, loadMonitoringConfig } from '../filters/contracts.ts';
 import { addDays, collectionRange, todayKst } from '../filters/dates.ts';
 import { createG2bClient, loadG2bConfig } from '../g2b/client.ts';
-import { runCollection, runDaily, runVerify } from './run.ts';
+import { runCollection, runDaily, runDeliveryBackfill, runDeliveryDaily, runVerify } from './run.ts';
 
 const { values } = parseArgs({
   options: {
@@ -17,19 +19,21 @@ const { values } = parseArgs({
 });
 
 const mode = values.mode ?? 'backfill';
-if (mode !== 'backfill' && mode !== 'daily' && mode !== 'verify') throw new Error(`--mode는 backfill | daily | verify 중 하나여야 합니다: ${mode}`);
+const MODES = ['backfill', 'daily', 'verify', 'dlvr-backfill', 'dlvr-daily'] as const;
+if (!(MODES as readonly string[]).includes(mode)) throw new Error(`--mode는 ${MODES.join(' | ')} 중 하나여야 합니다: ${mode}`);
 const today = todayKst();
 // 모드와 맞지 않는 옵션은 조용히 무시하지 않고 알린다.
-const unsupported = { backfill: ['days'], daily: ['to', 'days'], verify: ['from', 'to'] }[mode] as ('from' | 'to' | 'days')[];
+const unsupported = ({ backfill: ['days'], daily: ['to', 'days'], verify: ['from', 'to'], 'dlvr-backfill': ['days'], 'dlvr-daily': ['from', 'to', 'days'] } as Record<string, ('from' | 'to' | 'days')[]>)[mode]!;
 for (const name of unsupported) if (values[name] !== undefined) throw new Error(`--${name}은 --mode ${mode}에서 쓸 수 없습니다`);
 
-const maxCalls = Number(values['max-calls'] ?? (mode === 'daily' ? 80 : 40));
+const maxCalls = Number(values['max-calls'] ?? (mode === 'daily' ? 80 : mode === 'dlvr-daily' ? 20 : 40));
 // 일일 한도가 오퍼레이션당 1000회이므로 그 이하로만 허용한다.
 if (!Number.isInteger(maxCalls) || maxCalls < 1 || maxCalls > 1000) throw new Error('--max-calls는 1 이상 1000 이하의 정수여야 합니다');
 
 const db = openDb(process.env['DB_PATH'] || 'data/sparrow.db');
 migrate(db);
-const client = createG2bClient(loadG2bConfig(process.env, 'CONTRACT'));
+// 계약정보(계약)와 나라장터쇼핑몰(납품요구)은 서비스키 · 주소가 다르다.
+const client = createG2bClient(loadG2bConfig(process.env, mode.startsWith('dlvr') ? 'SHOPPING' : 'CONTRACT'));
 const matcher = createMatcher(loadMonitoringConfig());
 const log = (m: string) => console.log(`  ${m}`);
 
@@ -55,6 +59,23 @@ if (mode === 'backfill') {
       ? `완료: ${r.days}일 처리, 수신 ${r.fetched}건 중 9개사 계약 ${r.matched}건 저장, 호출 ${r.calls}회`
       : `실패: ${r.error} (${r.days}일 처리 후 중단, 호출 ${r.calls}회). 다음 실행이 실패한 날부터 이어 갑니다`,
   );
+  ok = r.status === 'success';
+} else if (mode === 'dlvr-backfill') {
+  const defaults = collectionRange(null, today);
+  const from = values.from ?? defaults?.from;
+  const to = values.to ?? defaults?.to;
+  if (from === undefined || to === undefined) throw new Error('수집할 기간이 없습니다. --from 과 --to 를 지정하세요');
+  addDays(from, 0);
+  addDays(to, 0);
+  if (from > to) throw new Error(`--from(${from})이 --to(${to})보다 늦습니다`);
+  console.log(`납품요구 백필 시작: ${from} ~ ${to} (호출 상한 ${maxCalls}회)`);
+  const r = await runDeliveryBackfill({ db, client, matcher, range: { from, to }, maxCalls, log });
+  console.log(r.status === 'success' ? `완료: 수신 ${r.fetched}행 중 9개사 납품요구 ${r.matched}행 저장, 호출 ${r.calls}회` : `실패: ${r.error} (호출 ${r.calls}회)`);
+  ok = r.status === 'success';
+} else if (mode === 'dlvr-daily') {
+  console.log(`납품요구 매일 수집 시작 (호출 상한 ${maxCalls}회)`);
+  const r = await runDeliveryDaily({ db, client, matcher, today, maxCalls, log });
+  console.log(r.status === 'success' ? `완료: 수신 ${r.fetched}행 중 9개사 납품요구 ${r.matched}행 저장, 호출 ${r.calls}회` : `실패: ${r.error} (호출 ${r.calls}회)`);
   ok = r.status === 'success';
 } else {
   const days = Number(values.days ?? 14);

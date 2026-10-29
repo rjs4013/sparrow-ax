@@ -57,6 +57,43 @@ export const migrations: Migration[] = [
       ALTER TABLE collect_runs ADD COLUMN note TEXT;
     `,
   },
+  {
+    id: '0003_delivery_requests',
+    // 나라장터쇼핑몰 납품요구 상세의 물품 행(우리 업체 것만). 변경 차수별 행을 모두 보관하고 조회가 가장 큰 차수만 고른다.
+    // 계약정보서비스의 계약과는 번호 체계가 달라 연결하지 않는다(독립 원천, WO-20261028-11).
+    sql: `
+      CREATE TABLE delivery_requests (
+        dlvr_req_no TEXT NOT NULL,
+        chg_ord INTEGER NOT NULL,
+        prdct_sno TEXT NOT NULL,
+        company_id TEXT NOT NULL,
+        company_name TEXT NOT NULL,
+        biz_no TEXT NOT NULL,
+        received_date TEXT NOT NULL,
+        demander_code TEXT NOT NULL,
+        demander_name TEXT NOT NULL,
+        demander_kind TEXT NOT NULL,
+        product_class_no TEXT NOT NULL,
+        product_class_name TEXT NOT NULL,
+        product_id TEXT NOT NULL,
+        product_name TEXT NOT NULL,
+        unit_price INTEGER,
+        qty INTEGER,
+        amount INTEGER,
+        deadline TEXT NOT NULL,
+        contract_no TEXT NOT NULL,
+        contract_style TEXT NOT NULL,
+        final_yn INTEGER NOT NULL,
+        incdec_qty INTEGER,
+        incdec_amt INTEGER,
+        verified INTEGER NOT NULL,
+        id_conflict INTEGER NOT NULL,
+        collected_at TEXT NOT NULL,
+        PRIMARY KEY (dlvr_req_no, chg_ord, prdct_sno, company_id)
+      );
+      CREATE INDEX delivery_requests_received_date ON delivery_requests (received_date);
+    `,
+  },
 ];
 
 export function openDb(path: string): DatabaseSync {

@@ -1,8 +1,10 @@
 import type { DatabaseSync } from 'node:sqlite';
-import { existingKeys, finishRun, lastSuccessRun, startRun, upsertContracts } from '../db/contracts.ts';
+import { existingKeys, finishRun, lastSuccessRun, startRun, upsertContracts, type RunKind } from '../db/contracts.ts';
+import { upsertDeliveries } from '../db/deliveries.ts';
 import type { Matcher } from '../filters/contracts.ts';
 import { addDays, collectionRange, todayKst, type IsoDate } from '../filters/dates.ts';
 import { collectContracts, collectDay, createFetcher } from './contracts.ts';
+import { collectDeliveries } from './deliveries.ts';
 
 export interface RunResult {
   status: 'success' | 'failed';
@@ -128,4 +130,37 @@ export async function runVerify(opts: RunOptions & { today: IsoDate; days: numbe
   }
   finishRun(opts.db, runId, { ...result, note }, now());
   return result;
+}
+
+// 납품요구(쇼핑몰) 한 구간의 수집을 실행 기록으로 감싼다. 끝까지 성공했을 때만 저장한다.
+async function runDeliveries(opts: RunOptions & { range: { from: IsoDate; to: IsoDate }; kind: RunKind }): Promise<RunResult> {
+  const now = opts.now ?? (() => new Date().toISOString());
+  const runId = startRun(opts.db, opts.range.from, opts.range.to, now(), opts.kind);
+  const fetcher = makeFetcher(opts);
+  let result: RunResult;
+  try {
+    const { rows, stats } = await collectDeliveries({ fetchPage: fetcher.fetchPage, matcher: opts.matcher, ...(opts.log ? { log: opts.log } : {}) }, opts.range);
+    upsertDeliveries(opts.db, rows, now());
+    result = { status: 'success', fetched: stats.fetched, matched: rows.length, calls: fetcher.calls(), error: null };
+  } catch (err) {
+    result = { status: 'failed', fetched: 0, matched: 0, calls: fetcher.calls(), error: message(err) };
+  }
+  finishRun(opts.db, runId, result, now());
+  return result;
+}
+
+export function runDeliveryBackfill(opts: RunOptions & { range: { from: IsoDate; to: IsoDate } }): Promise<RunResult> {
+  return runDeliveries({ ...opts, kind: 'dlvr_backfill' });
+}
+
+// 접수일자의 등록 지연을 모르므로, 마지막 성공일 다음 날부터 어제까지에 최근 LOOKBACK_DAYS일을 더해 다시 받는다(upsert라 안전).
+const LOOKBACK_DAYS = 3;
+
+// 납품요구 매일 수집: 시작점은 dlvr_daily 성공 기록의 마지막 날, 없으면 dlvr_backfill 성공 기록의 마지막 날이다.
+export async function runDeliveryDaily(opts: RunOptions & { today: IsoDate }): Promise<RunResult> {
+  const last = lastSuccessRun(opts.db, 'dlvr_daily') ?? lastSuccessRun(opts.db, 'dlvr_backfill');
+  if (!last) throw new Error('납품요구 수집의 시작점이 없습니다. 먼저 납품요구 백필(--mode dlvr-backfill)을 성공시키세요');
+  const range = collectionRange(last.rangeTo, opts.today);
+  if (range === null) return { status: 'success', fetched: 0, matched: 0, calls: 0, error: null };
+  return runDeliveries({ ...opts, range: { from: addDays(range.from, -LOOKBACK_DAYS), to: range.to }, kind: 'dlvr_daily' });
 }
