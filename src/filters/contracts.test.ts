@@ -120,15 +120,19 @@ test('실제 설정: 업체별 식별번호 수 · 잠정 여부 · 별칭 분�
   assert.deepEqual(counts, {
     sparrow: 24, ssr: 9, infoline: 10, codemind: 5, haros: 1, nilesoft: 6, redpen: 0, codeone: 2, labradorlabs: 1,
   });
-  // 실제 계약 응답으로 등록 상호를 확인한 업체만 provisional=false다. 에스에스알은 별칭(트리니티소프트)이 미확인이다.
-  const confirmed = ['sparrow', 'nilesoft', 'codemind', 'labradorlabs'];
+  // 실제 응답으로 등록 상호를 확인한 업체만 provisional=false다. 에스에스알은 별칭(트리니티소프트)이, 레드펜소프트는 등록 상호가 미확인이다.
+  const confirmed = ['sparrow', 'nilesoft', 'codemind', 'labradorlabs', 'infoline', 'codeone', 'haros'];
   for (const c of config.companies) assert.equal(c.provisional, !confirmed.includes(c.id), c.id);
 
   const real = createMatcher(config);
   const hit = (companyName: string, productId: string) => real.classify({ categoryCode: CAT, companyName, productId });
   assert.deepEqual(hit('트리니티소프트', '25613507'), { pass: true, companyId: 'ssr', verified: true, idConflict: false });
   assert.deepEqual(hit('(주)에스에스알', '22849502'), { pass: true, companyId: 'ssr', verified: true, idConflict: true });
-  assert.deepEqual(hit('정보라인', '22849502'), { pass: true, companyId: 'infoline', verified: true, idConflict: true });
+  assert.deepEqual(hit('(주)정보라인', '22849502'), { pass: true, companyId: 'infoline', verified: true, idConflict: true });
+  // 납품요구 실응답(2026)에서 확인한 등록 상호. 정확 일치라 "(주)"가 없는 이름은 통과하지 못한다.
+  assert.equal(hit('(주)코드원', '12345678').pass, true);
+  assert.equal(hit('(주)하로스', '12345678').pass, true);
+  for (const name of ['정보라인', '코드원', '하로스']) assert.deepEqual(hit(name, '22849502'), { pass: false, rejected: 'company' }, name);
   // 레드펜소프트는 받은 식별번호가 없어 업체명만 통과하고 확인 대상 표시는 없다.
   assert.deepEqual(hit('레드펜소프트', '12345678'), { pass: true, companyId: 'redpen', verified: false, idConflict: false });
   // 제외된 업체
