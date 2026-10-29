@@ -19,6 +19,12 @@ test('서비스별 변수를 읽고, 서비스키나 요청주소가 없으면 �
   assert.throws(() => loadG2bConfig({ G2B_CONTRACT_SERVICE_KEY: 'k', G2B_CONTRACT_BASE_URL: 'https://x' }, 'OPENSTD'), /G2B_OPENSTD_SERVICE_KEY/);
 });
 
+test('나라장터쇼핑몰 서비스(SHOPPING)도 서비스별 변수를 읽는다', () => {
+  const env = { G2B_SHOPPING_SERVICE_KEY: 's', G2B_SHOPPING_BASE_URL: 'https://shop.test/api', G2B_CONTRACT_SERVICE_KEY: 'c', G2B_CONTRACT_BASE_URL: 'https://c' };
+  assert.deepEqual(loadG2bConfig(env, 'SHOPPING'), { baseUrl: 'https://shop.test/api', serviceKey: 's' });
+  assert.throws(() => loadG2bConfig({ G2B_CONTRACT_SERVICE_KEY: 'c', G2B_CONTRACT_BASE_URL: 'https://c' }, 'SHOPPING'), /G2B_SHOPPING_SERVICE_KEY/);
+});
+
 test('요청주소가 https가 아니거나 주소 형식이 아니면 거부한다 (서비스키가 쿼리스트링으로 가므로)', () => {
   for (const url of ['http://apis.data.go.kr/x', 'ftp://x', 'apis.data.go.kr/x', '//x', 'not a url']) {
     assert.throws(() => loadG2bConfig({ G2B_CONTRACT_SERVICE_KEY: 'k', G2B_CONTRACT_BASE_URL: url }, 'CONTRACT'), /https/, url);

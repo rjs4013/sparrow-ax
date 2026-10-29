@@ -4,7 +4,7 @@ export interface G2bConfig {
 }
 
 // 포털에서 서비스마다 키를 따로 받으므로 변수도 서비스별이다 (G2B_{서비스}_SERVICE_KEY, G2B_{서비스}_BASE_URL).
-export type G2bService = 'CONTRACT' | 'OPENSTD';
+export type G2bService = 'CONTRACT' | 'OPENSTD' | 'SHOPPING';
 
 // 서비스키는 쿼리스트링으로 가므로 https가 아니면 평문으로 노출된다. 그 경우 호출하지 않는다.
 function requireHttps(baseUrl: string): void {
