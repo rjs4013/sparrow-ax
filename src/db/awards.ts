@@ -97,3 +97,9 @@ export function listAwards(db: DatabaseSync, q: { from: string; to: string }): A
     noticeStatus: r['notice_status'] === null ? '' : String(r['notice_status']),
   }));
 }
+
+// 저장된 가장 이른 개찰일자(YYYY-MM-DD). 아직 하나도 없으면 null.
+export function firstAwardDate(db: DatabaseSync): string | null {
+  const r = db.prepare('SELECT MIN(substr(opening, 1, 10)) AS d FROM bid_awards').get();
+  return r && r['d'] !== null && r['d'] !== undefined ? String(r['d']) : null;
+}

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { listBids, upsertBids, type BidRow } from './bids.ts';
+import { firstNoticeDate, listBids, upsertBids, type BidRow } from './bids.ts';
 import { migrate, openDb } from './index.ts';
 
 const row = (over: Partial<BidRow> = {}): BidRow => ({
@@ -63,4 +63,11 @@ test('저장 중 오류가 나면 일부만 저장되지 않는다', () => {
   const db = fresh();
   assert.throws(() => upsertBids(db, [row(), row({ bidNtceNo: 'BAD', noticeDate: null as unknown as string })], '2026-10-29T00:00:00Z'));
   assert.deepEqual(listBids(db, { from: '2026-01-01', to: '2026-12-31' }), []);
+});
+
+test('firstNoticeDate: 저장된 가장 이른 공고일자(없으면 null) — 대시보드가 "수집 전" 기간을 구별하는 데 쓴다', () => {
+  const db = fresh();
+  assert.equal(firstNoticeDate(db), null);
+  upsertBids(db, [row({ bidNtceNo: 'A', noticeDate: '2026-10-22' }), row({ bidNtceNo: 'B', noticeDate: '2026-10-05' })], '2026-10-29T00:00:00Z');
+  assert.equal(firstNoticeDate(db), '2026-10-05');
 });

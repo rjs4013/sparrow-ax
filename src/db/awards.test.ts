@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { listAwards, upsertAwards, type AwardRow } from './awards.ts';
+import { firstAwardDate, listAwards, upsertAwards, type AwardRow } from './awards.ts';
 import { upsertBids, type BidRow } from './bids.ts';
 import { migrate, openDb } from './index.ts';
 
@@ -79,4 +79,11 @@ test('저장 중 오류가 나면 일부만 저장되지 않는다', () => {
   const db = fresh();
   assert.throws(() => upsertAwards(db, [award(), award({ bidNtceNo: 'BAD', opening: null as unknown as string })], '2026-10-29T00:00:00Z'));
   assert.deepEqual(listAwards(db, { from: '2026-01-01', to: '2026-12-31' }), []);
+});
+
+test('firstAwardDate: 저장된 가장 이른 개찰일자(없으면 null)', () => {
+  const db = fresh();
+  assert.equal(firstAwardDate(db), null);
+  upsertAwards(db, [award({ bidNtceNo: 'A', opening: '2026-10-27 11:00' }), award({ bidNtceNo: 'B', opening: '2026-10-05 09:00' })], '2026-10-29T00:00:00Z');
+  assert.equal(firstAwardDate(db), '2026-10-05');
 });
