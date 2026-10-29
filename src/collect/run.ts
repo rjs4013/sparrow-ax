@@ -1,9 +1,11 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { existingKeys, finishRun, lastSuccessRun, startRun, upsertContracts, type RunKind } from '../db/contracts.ts';
+import { upsertBids } from '../db/bids.ts';
 import { upsertDeliveries } from '../db/deliveries.ts';
 import type { Matcher } from '../filters/contracts.ts';
 import { addDays, collectionRange, todayKst, type IsoDate } from '../filters/dates.ts';
 import { collectContracts, collectDay, createFetcher } from './contracts.ts';
+import { collectBidDay } from './bids.ts';
 import { collectDeliveries } from './deliveries.ts';
 
 export interface RunResult {
@@ -163,4 +165,51 @@ export async function runDeliveryDaily(opts: RunOptions & { today: IsoDate }): P
   const range = collectionRange(last.rangeTo, opts.today);
   if (range === null) return { status: 'success', fetched: 0, matched: 0, calls: 0, error: null };
   return runDeliveries({ ...opts, range: { from: addDays(range.from, -LOOKBACK_DAYS), to: range.to }, kind: 'dlvr_daily' });
+}
+
+// 입찰공고 매일 수집(개방표준, 입찰공고일시 하루 단위): 마지막 성공한 날 다음 날부터 어제까지를 하루씩 받고 하루마다 저장 · 기록한다.
+// 시작점: bid_daily 성공 기록의 마지막 날 + 1, 없으면 어제 하루(요구사항: "전일자 신규"). from을 주면 그 날부터 다시 받는다.
+export async function runBidDaily(opts: {
+  db: DatabaseSync;
+  client: { get(path: string, params?: Record<string, string | number>): Promise<unknown> };
+  keywords: string[];
+  maxCalls: number;
+  today: IsoDate;
+  from?: IsoDate;
+  sleep?: (ms: number) => Promise<void>;
+  now?: () => string;
+  log?: (message: string) => void;
+}): Promise<DailyResult> {
+  const now = opts.now ?? (() => new Date().toISOString());
+  const yesterday = addDays(opts.today, -1);
+  const last = lastSuccessRun(opts.db, 'bid_daily');
+  const start = opts.from ?? (last ? addDays(last.rangeTo, 1) : yesterday);
+  const total: DailyResult = { status: 'success', fetched: 0, matched: 0, calls: 0, error: null, days: 0 };
+  if (start > yesterday) return total;
+
+  const fetcher = createFetcher(opts.client, { maxCalls: opts.maxCalls, ...(opts.sleep ? { sleep: opts.sleep } : {}) });
+  const deps = { fetchPage: fetcher.fetchPage, keywords: opts.keywords, ...(opts.log ? { log: opts.log } : {}) };
+  for (let day = start; day <= yesterday; day = addDays(day, 1)) {
+    const runId = startRun(opts.db, day, day, now(), 'bid_daily');
+    const before = fetcher.calls();
+    try {
+      const { rows, stats } = await collectBidDay(deps, day);
+      upsertBids(opts.db, rows, now());
+      // 쪽 이동으로 같은 날을 다시 받았거나 전체 건수를 못 채웠다면 기록에 남긴다.
+      const note = stats.passes > 1 || stats.shortfall > 0
+        ? `쪽 이동 확인: ${stats.passes}번 받음, 고유 ${stats.fetched}건${stats.shortfall > 0 ? ` (전체 건수에 ${stats.shortfall}건 부족)` : ''}`
+        : null;
+      finishRun(opts.db, runId, { status: 'success', fetched: stats.fetched, matched: rows.length, calls: fetcher.calls() - before, error: null, note }, now());
+      total.days++;
+      total.fetched += stats.fetched;
+      total.matched += rows.length;
+    } catch (err) {
+      finishRun(opts.db, runId, { status: 'failed', fetched: 0, matched: 0, calls: fetcher.calls() - before, error: message(err) }, now());
+      total.status = 'failed';
+      total.error = message(err);
+      break;
+    }
+  }
+  total.calls = fetcher.calls();
+  return total;
 }

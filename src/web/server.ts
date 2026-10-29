@@ -1,7 +1,9 @@
 import Fastify from 'fastify';
 import type { DatabaseSync } from 'node:sqlite';
+import { listBids, type BidRow } from '../db/bids.ts';
 import { lastRunByKind, listContracts, type ContractRow, type RunKind, type RunRecord } from '../db/contracts.ts';
 import { listDeliveries, type DeliveryRow } from '../db/deliveries.ts';
+import { buildWorkbook, exportFileName } from '../export/excel.ts';
 import { addDays, periodRange, shiftPeriod, todayKst, type PeriodView } from '../filters/dates.ts';
 
 export interface ServerOptions {
@@ -9,6 +11,10 @@ export interface ServerOptions {
   // 업체 선택 목록(설정의 id · 표시 이름).
   companies?: { id: string; label: string }[];
   today?: () => string;
+  // 엑셀의 계약 시트에 쓰는 물품분류번호(설정 값).
+  categoryCode?: string;
+  // 입찰공고 화면의 키워드 선택지(설정의 필터 키워드).
+  keywords?: string[];
 }
 
 const VIEWS: { view: PeriodView; label: string }[] = [
@@ -21,6 +27,9 @@ const VIEWS: { view: PeriodView; label: string }[] = [
 const esc = (v: string | number): string =>
   String(v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 
+// RFC 5987 filename*: encodeURIComponent가 인코딩하지 않는 ' ( ) * 도 퍼센트 인코딩한다.
+const encodeRfc5987 = (s: string): string => encodeURIComponent(s).replace(/['()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
+
 const won = (n: number | null): string => (n === null ? '-' : n.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ','));
 
 const CSS = `
@@ -30,7 +39,7 @@ const CSS = `
 main{max-width:1200px;margin:0 auto;padding:20px 16px 48px}h1{font-size:20px;margin:0 0 12px}
 .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin-bottom:12px}
 .row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}.grow{flex:1}.muted{color:var(--muted)}
-.tabs a,.nav a,.pages a{padding:4px 12px;border:1px solid var(--line);border-radius:6px;color:var(--fg);text-decoration:none;background:var(--card)}
+.tabs a,.nav a,.pages a,.dl{padding:4px 12px;border:1px solid var(--line);border-radius:6px;color:var(--fg);text-decoration:none;background:var(--card)}
 .tabs a.on,.pages a.on{background:var(--accent);color:#fff;border-color:var(--accent)}.pages{margin-bottom:12px}
 select,button{font:inherit;padding:4px 8px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--fg)}
 .status-success{color:var(--ok);font-weight:600}.status-failed{color:var(--bad);font-weight:600}.status-running{color:var(--warn);font-weight:600}.runline{padding:6px 0;border-top:1px solid var(--line)}.runline:first-of-type{border-top:0}
@@ -41,11 +50,16 @@ td.num{text-align:right;white-space:nowrap}.chip{display:inline-block;padding:1p
 @media (max-width:640px){main{padding:12px}}
 `;
 
-type Page = 'contracts' | 'deliveries';
-const PATH: Record<Page, string> = { contracts: '/', deliveries: '/deliveries' };
+type Page = 'contracts' | 'deliveries' | 'bids';
+const PATH: Record<Page, string> = { contracts: '/', deliveries: '/deliveries', bids: '/bids' };
+const PAGE_LABEL: Record<Page, string> = { contracts: '계약', deliveries: '납품요구', bids: '입찰공고' };
 
-function href(page: Page, view: PeriodView, date: string, company: string): string {
-  const q = [`view=${view}`, `date=${date}`, ...(company === '' ? [] : [`company=${encodeURIComponent(company)}`])];
+// extra: 화면별 추가 조회 조건(입찰공고의 수요기관 · 키워드). 빈 값은 싣지 않는다.
+function href(page: Page, view: PeriodView, date: string, company: string, extra: Record<string, string> = {}): string {
+  const q = [
+    `view=${view}`, `date=${date}`, ...(company === '' ? [] : [`company=${encodeURIComponent(company)}`]),
+    ...Object.entries(extra).filter(([, v]) => v !== '').map(([k, v]) => `${k}=${encodeURIComponent(v)}`),
+  ];
   return `${PATH[page]}?${q.join('&')}`;
 }
 
@@ -57,18 +71,21 @@ const kst = (iso: string): string => {
 
 const KIND_LABEL: Record<RunKind, string> = {
   backfill: '백필(체결일자)', daily: '매일 증분(등록일시)', verify: '교차 검증',
-  dlvr_backfill: '납품요구 백필(접수일자)', dlvr_daily: '납품요구 매일(접수일자)',
+  dlvr_backfill: '납품요구 백필(접수일자)', dlvr_daily: '납품요구 매일(접수일자)', bid_daily: '입찰공고 매일(공고일시)',
 };
-const PAGE_KINDS: Record<Page, RunKind[]> = { contracts: ['daily', 'verify', 'backfill'], deliveries: ['dlvr_daily', 'dlvr_backfill'] };
+const PAGE_KINDS: Record<Page, RunKind[]> = { contracts: ['daily', 'verify', 'backfill'], deliveries: ['dlvr_daily', 'dlvr_backfill'], bids: ['bid_daily'] };
 const EMPTY_RUN: Record<Page, string> = {
   contracts: '수집 기록이 없습니다. <code>npm run collect</code>로 수집을 먼저 실행하세요.',
   deliveries: '납품요구 수집 기록이 없습니다. <code>npm run collect -- --mode dlvr-backfill</code>로 수집을 먼저 실행하세요.',
+  bids: '입찰공고 수집 기록이 없습니다. <code>npm run collect -- --mode bid-daily</code>로 수집을 먼저 실행하세요.',
 };
 
 function runLine(run: RunRecord): string {
   const label = { success: '성공', failed: '실패', running: '진행 중(또는 중단됨)' }[run.status];
   const range = run.rangeFrom === run.rangeTo ? run.rangeFrom : `${run.rangeFrom} ~ ${run.rangeTo}`;
-  const what = run.kind.startsWith('dlvr') ? `수신 ${run.fetched}행 · 9개사 납품요구 ${run.matched}행 저장` : `수신 ${run.fetched}건 · 9개사 계약 ${run.matched}건 저장`;
+  const what = run.kind.startsWith('bid')
+    ? `수신 ${run.fetched}건 · 키워드 적중 ${run.matched}건 저장`
+    : run.kind.startsWith('dlvr') ? `수신 ${run.fetched}행 · 9개사 납품요구 ${run.matched}행 저장` : `수신 ${run.fetched}건 · 9개사 계약 ${run.matched}건 저장`;
   const detail = `${what} · 호출 ${run.calls}회`;
   return `<div class="runline"><div class="row"><b>${esc(KIND_LABEL[run.kind])}</b><span class="status-${run.status}">${label}</span>
 <span>${esc(range)}</span><span class="muted">${esc(kst(run.finishedAt ?? run.startedAt))}</span></div>
@@ -107,14 +124,18 @@ interface Shell {
   page: Page; view: PeriodView; date: string; company: string; companies: { id: string; label: string }[];
   range: { from: string; to: string }; runs: Partial<Record<RunKind, RunRecord>>;
   title: string; summary: string; body: string; note: string;
+  // 입찰공고 화면처럼 업체 선택 대신 쓰는 조회 조건(선택 상자 HTML)과 그 값(이동 링크에 싣는다). 있으면 업체 선택 · 엑셀 링크는 없다.
+  controls?: string; extra?: Record<string, string>;
 }
 
 // 계약 · 납품요구 두 화면의 공통 뼈대: 화면 이동, 수집 상태, 기간 · 업체 선택.
 function shell(s: Shell): string {
   const { page, view, date, company } = s;
-  const pages = (['contracts', 'deliveries'] as Page[])
-    .map((p) => `<a class="${p === page ? 'on' : ''}" href="${esc(href(p, view, date, company))}">${p === 'contracts' ? '계약' : '납품요구'}</a>`).join('');
-  const tabs = VIEWS.map((v) => `<a class="${v.view === view ? 'on' : ''}" href="${esc(href(page, v.view, date, company))}">${v.label}</a>`).join('');
+  const extra = s.extra ?? {};
+  const pages = (['contracts', 'deliveries', 'bids'] as Page[])
+    .map((p) => `<a class="${p === page ? 'on' : ''}" href="${esc(href(p, view, date, company))}">${PAGE_LABEL[p]}</a>`).join('');
+  const tabs = VIEWS.map((v) => `<a class="${v.view === view ? 'on' : ''}" href="${esc(href(page, v.view, date, company, extra))}">${v.label}</a>`).join('');
+  const exportHref = `/export.xlsx?date=${date}${company === '' ? '' : `&company=${encodeURIComponent(company)}`}`;
   const options = [{ id: '', label: '전체 업체' }, ...s.companies]
     .map((c) => `<option value="${esc(c.id)}"${c.id === company ? ' selected' : ''}>${esc(c.label)}</option>`).join('');
   return `<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -124,8 +145,9 @@ function shell(s: Shell): string {
 ${runBox(page, s.runs)}
 <div class="card"><form method="get" action="${PATH[page]}" class="row"><input type="hidden" name="view" value="${view}"><input type="hidden" name="date" value="${esc(date)}">
 <span class="tabs row">${tabs}</span>
-<span class="nav row"><a href="${esc(href(page, view, shiftPeriod(view, date, -1), company))}">← 이전</a><a href="${esc(href(page, view, shiftPeriod(view, date, 1), company))}">다음 →</a></span>
-<select name="company" aria-label="업체">${options}</select><button type="submit">조회</button>
+<span class="nav row"><a href="${esc(href(page, view, shiftPeriod(view, date, -1), company, extra))}">← 이전</a><a href="${esc(href(page, view, shiftPeriod(view, date, 1), company, extra))}">다음 →</a></span>
+${s.controls ?? `<select name="company" aria-label="업체">${options}</select>`}<button type="submit">조회</button>
+${s.controls ? '' : `<a class="dl" href="${esc(exportHref)}" title="고른 날짜가 속한 달 전체를 엑셀로 내려받습니다">엑셀 내보내기</a>`}
 <span class="grow"></span><b>${esc(s.range.from)} ~ ${esc(s.range.to)}</b><span class="muted">${esc(s.summary)}</span></form></div>
 <div class="card">${s.body}</div>
 <p class="muted">${s.note}</p>
@@ -151,6 +173,23 @@ function deliveriesBody(rows: DeliveryRow[]): string {
     .join('')}</tbody></table></div>`;
 }
 
+// 외부 링크는 http(s)만 링크로 만든다(javascript: 같은 값 방어).
+const safeLink = (url: string): string =>
+  /^https?:\/\//i.test(url) ? `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">공고 보기</a>` : '<span class="muted">-</span>';
+
+function bidsBody(rows: BidRow[]): string {
+  if (rows.length === 0) return '<div class="empty muted">해당 기간에 수집된 입찰공고가 없습니다.</div>';
+  return `<div class="tablewrap"><table><thead><tr><th>공고명</th><th>수요처</th><th class="num">추정가격(원)</th><th>입찰일</th><th>등록마감</th><th>투찰마감</th><th>개찰</th><th>공고 링크</th></tr></thead><tbody>${rows
+    .map((r) => {
+      const status = r.status === '' || r.status === '일반공고' ? '' : `<span class="chip warn">${esc(r.status)}</span>`;
+      const kind = r.workKind === '' ? '' : `<span class="chip">${esc(r.workKind)}</span>`;
+      const kws = r.keywords.map((k) => `<span class="chip ok">${esc(k)}</span>`).join('');
+      const budget = r.budgetAmount === null ? '' : `<div class="muted">배정예산 ${won(r.budgetAmount)}</div>`;
+      return `<tr><td>${esc(r.title)}<div class="muted">${esc(r.bidNtceNo)} · 차수 ${esc(r.bidNtceOrd)}</div>${status}${kind}${kws}</td><td>${esc(r.demanderName)}</td><td class="num">${won(r.estimatedPrice)}${budget}</td><td>${esc(r.bidBegin || '-')}</td><td>${esc(r.regClose || '-')}</td><td>${esc(r.bidClose || '-')}</td><td>${esc(r.opening || '-')}</td><td>${safeLink(r.url)}</td></tr>`;
+    })
+    .join('')}</tbody></table></div>`;
+}
+
 export function buildServer(opts: ServerOptions = {}) {
   const app = Fastify({ logger: false });
   app.get('/health', async () => ({ status: 'ok' }));
@@ -161,19 +200,78 @@ export function buildServer(opts: ServerOptions = {}) {
     const today = opts.today ?? todayKst;
     const CSP = "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
 
+    const BAD = '잘못된 조회 조건입니다 (view: day|week|month, date: YYYY-MM-DD, company: 목록의 id)';
+    // 화면 · 엑셀이 같이 쓰는 조회 조건 검증. 잘못되면 null.
+    const parseConditions = (q: Record<string, string | undefined>): { view: PeriodView; date: string; company: string } | null => {
+      const view = (q['view'] ?? 'month') as PeriodView;
+      const date = q['date'] ?? today();
+      const company = q['company'] ?? '';
+      try {
+        if (!VIEWS.some((v) => v.view === view)) throw new Error('view');
+        addDays(date, 0);
+        if (company !== '' && !companies.some((c) => c.id === company)) throw new Error('company');
+      } catch {
+        return null;
+      }
+      return { view, date, company };
+    };
+
+    // 엑셀 내보내기: 고른 날짜가 속한 달 전체(일/주 보기여도) + 업체 선택을 반영한다.
+    app.get('/export.xlsx', async (req, reply) => {
+      const cond = parseConditions(req.query as Record<string, string | undefined>);
+      if (!cond) return reply.code(400).type('text/plain; charset=utf-8').send(BAD);
+      const range = periodRange('month', cond.date);
+      const month = range.from.slice(0, 7);
+      const filter = { ...range, ...(cond.company === '' ? {} : { companyId: cond.company }) };
+      const label = cond.company === '' ? null : (companies.find((c) => c.id === cond.company)?.label ?? cond.company);
+      const file = await buildWorkbook({
+        month, companyLabel: label, categoryCode: opts.categoryCode ?? '', deliveries: listDeliveries(db, filter), contracts: listContracts(db, filter),
+      });
+      return reply
+        .type('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+        .header('content-disposition', `attachment; filename="export_${month}.xlsx"; filename*=UTF-8''${encodeRfc5987(exportFileName(month, label))}`)
+        .header('cache-control', 'no-store')
+        .header('x-content-type-options', 'nosniff')
+        .send(file);
+    });
+
+    // 입찰공고 화면: 공고일자 기간(일 · 주 · 월) · 수요기관 · 공고 키워드 조건.
+    const keywords = opts.keywords ?? [];
+    app.get('/bids', async (req, reply) => {
+      const q = req.query as Record<string, string | undefined>;
+      const cond = parseConditions({ ...(q['view'] === undefined ? {} : { view: q['view'] }), ...(q['date'] === undefined ? {} : { date: q['date'] }) });
+      const demander = q['demander'] ?? '';
+      const keyword = q['keyword'] ?? '';
+      if (!cond || demander.length > 200 || (keyword !== '' && !keywords.includes(keyword))) {
+        return reply.code(400).type('text/plain; charset=utf-8').send('잘못된 조회 조건입니다 (view: day|week|month, date: YYYY-MM-DD, demander: 200자 이하, keyword: 설정의 키워드)');
+      }
+      const { view, date } = cond;
+      const range = periodRange(view, date);
+      const inRange = listBids(db, range);
+      const rows = inRange.filter((r) => (demander === '' || r.demanderName === demander) && (keyword === '' || r.keywords.includes(keyword)));
+      // 고른 수요기관이 이 기간에 없어도 선택 상자에 남겨, 기간을 옮겨도 조건이 조용히 바뀌지 않게 한다.
+      const demanders = [...new Set([...inRange.map((r) => r.demanderName), ...(demander === '' ? [] : [demander])])].sort();
+      const opt = (value: string, label: string, selected: string) => `<option value="${esc(value)}"${value === selected ? ' selected' : ''}>${esc(label)}</option>`;
+      const controls =
+        `<select name="demander" aria-label="수요기관">${[opt('', '전체 수요기관', demander), ...demanders.map((d) => opt(d, d, demander))].join('')}</select>` +
+        `<select name="keyword" aria-label="공고 키워드">${[opt('', '전체 키워드', keyword), ...keywords.map((k) => opt(k, k, keyword))].join('')}</select>`;
+      const html = shell({
+        page: 'bids', view, date, company: '', companies: [], range, runs: lastRunByKind(db), title: '입찰공고',
+        summary: `${rows.length}건 · 수요기관 ${new Set(rows.map((r) => r.demanderName)).size}곳`, body: bidsBody(rows), controls, extra: { demander, keyword },
+        note: '공고일자 기준이며 공고명에 필터 키워드(대소문자 무시 포함)가 있는 입찰공고만 저장합니다. 금액은 추정가격입니다(요구사항의 "기초금액"은 입찰공고 응답에 없습니다). 정정 · 재입찰 공고는 차수가 다른 행입니다.',
+      });
+      return reply
+        .type('text/html; charset=utf-8')
+        .header('content-security-policy', CSP)
+        .header('x-content-type-options', 'nosniff')
+        .send(html);
+    });
+
     for (const page of ['contracts', 'deliveries'] as Page[]) {
       app.get(PATH[page], async (req, reply) => {
-        const q = req.query as Record<string, string | undefined>;
-        const view = (q['view'] ?? 'month') as PeriodView;
-        const date = q['date'] ?? today();
-        const company = q['company'] ?? '';
-        try {
-          if (!VIEWS.some((v) => v.view === view)) throw new Error('view');
-          addDays(date, 0);
-          if (company !== '' && !companies.some((c) => c.id === company)) throw new Error('company');
-        } catch {
-          return reply.code(400).type('text/plain; charset=utf-8').send('잘못된 조회 조건입니다 (view: day|week|month, date: YYYY-MM-DD, company: 목록의 id)');
-        }
+        const cond = parseConditions(req.query as Record<string, string | undefined>);
+        if (!cond) return reply.code(400).type('text/plain; charset=utf-8').send(BAD);
+        const { view, date, company } = cond;
         const range = periodRange(view, date);
         const filter = { ...range, ...(company === '' ? {} : { companyId: company }) };
         const base = { page, view, date, company, companies, range, runs: lastRunByKind(db) };

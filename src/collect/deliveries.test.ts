@@ -19,7 +19,7 @@ const matcher = createMatcher(parseMonitoringConfig({
 
 const OP = 'getDlvrReqDtlInfoList';
 const item = (over: Record<string, string> = {}) => ({
-  dlvrReqNo: 'R26TB00000001', dlvrReqChgOrd: '0', dlvrReqRcptDate: '2026-06-08', prdctSno: '1', prdctClsfcNo: '43233205',
+  dlvrReqNo: 'R26TB00000001', dlvrReqNm: '정보보안 솔루션 구매', dlvrReqChgOrd: '0', dlvrReqRcptDate: '2026-06-08', prdctSno: '1', prdctClsfcNo: '43233205',
   prdctClsfcNoNm: '트랜잭션보안및바이러스보호소프트웨어', prdctIdntNo: '33333333', prdctIdntNoNm: '웹방화벽', prdctUprc: '45500000',
   prdctQty: '1', prdctAmt: '45500000', dlvrTmlmtDate: '2026-07-08', cntrctNo: '002461624', cntrctCnclsStleNm: '제3자단가계약',
   dminsttCd: '1790364', dminsttNm: '고위공직자범죄수사처', dmndInsttDivNm: '중앙행정기관', corpNm: '주식회사 에이', cntrctCorpBizno: '1234567890',
@@ -63,7 +63,7 @@ test('우리 업체(상호 정확 일치) 행만 저장 행으로 바꾼다', as
   const { rows, stats } = await collect(client);
   assert.equal(rows.length, 1);
   assert.deepEqual(rows[0], {
-    dlvrReqNo: 'R26TB00000001', chgOrd: 0, prdctSno: '1', companyId: 'a', companyName: '주식회사 에이', bizNo: '1234567890',
+    dlvrReqNo: 'R26TB00000001', requestName: '정보보안 솔루션 구매', chgOrd: 0, prdctSno: '1', companyId: 'a', companyName: '주식회사 에이', bizNo: '1234567890',
     receivedDate: '2026-06-08', demanderCode: '1790364', demanderName: '고위공직자범죄수사처', demanderKind: '중앙행정기관',
     productClassNo: '43233205', productClassName: '트랜잭션보안및바이러스보호소프트웨어', productId: '33333333', productName: '웹방화벽',
     unitPrice: 45_500_000, qty: 1, amount: 45_500_000, deadline: '2026-07-08', contractNo: '002461624', contractStyle: '제3자단가계약',

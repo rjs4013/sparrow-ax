@@ -3,6 +3,8 @@ import type { DatabaseSync } from 'node:sqlite';
 // 나라장터쇼핑몰 납품요구 상세의 물품 행 하나 (우리 업체 것만 저장한다).
 export interface DeliveryRow {
   dlvrReqNo: string;
+  // 납품요구건명(요구사항의 "공사명").
+  requestName: string;
   // 변경 차수. 변경본은 행이 따로 오므로 모두 저장하고 조회는 가장 큰 차수만 보여 준다.
   chgOrd: number;
   prdctSno: string;
@@ -33,12 +35,12 @@ export interface DeliveryRow {
 // 같은 키(납품요구번호, 변경차수, 물품순번, 업체 id)는 갱신한다. 전체가 한 트랜잭션이다.
 export function upsertDeliveries(db: DatabaseSync, rows: DeliveryRow[], now: string): void {
   const stmt = db.prepare(`
-    INSERT INTO delivery_requests (dlvr_req_no, chg_ord, prdct_sno, company_id, company_name, biz_no, received_date, demander_code,
+    INSERT INTO delivery_requests (dlvr_req_no, dlvr_req_nm, chg_ord, prdct_sno, company_id, company_name, biz_no, received_date, demander_code,
       demander_name, demander_kind, product_class_no, product_class_name, product_id, product_name, unit_price, qty, amount, deadline,
       contract_no, contract_style, final_yn, incdec_qty, incdec_amt, verified, id_conflict, collected_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT (dlvr_req_no, chg_ord, prdct_sno, company_id) DO UPDATE SET
-      company_name = excluded.company_name, biz_no = excluded.biz_no, received_date = excluded.received_date,
+      dlvr_req_nm = excluded.dlvr_req_nm, company_name = excluded.company_name, biz_no = excluded.biz_no, received_date = excluded.received_date,
       demander_code = excluded.demander_code, demander_name = excluded.demander_name, demander_kind = excluded.demander_kind,
       product_class_no = excluded.product_class_no, product_class_name = excluded.product_class_name, product_id = excluded.product_id,
       product_name = excluded.product_name, unit_price = excluded.unit_price, qty = excluded.qty, amount = excluded.amount,
@@ -49,7 +51,7 @@ export function upsertDeliveries(db: DatabaseSync, rows: DeliveryRow[], now: str
   try {
     for (const r of rows) {
       stmt.run(
-        r.dlvrReqNo, r.chgOrd, r.prdctSno, r.companyId, r.companyName, r.bizNo, r.receivedDate, r.demanderCode, r.demanderName,
+        r.dlvrReqNo, r.requestName, r.chgOrd, r.prdctSno, r.companyId, r.companyName, r.bizNo, r.receivedDate, r.demanderCode, r.demanderName,
         r.demanderKind, r.productClassNo, r.productClassName, r.productId, r.productName, r.unitPrice, r.qty, r.amount, r.deadline,
         r.contractNo, r.contractStyle, r.finalYn ? 1 : 0, r.incdecQty, r.incdecAmt, r.verified ? 1 : 0, r.idConflict ? 1 : 0, now,
       );
@@ -85,6 +87,7 @@ export function listDeliveries(db: DatabaseSync, q: { from: string; to: string; 
     .all(...args);
   return rows.map((r) => ({
     dlvrReqNo: String(r['dlvr_req_no']),
+    requestName: String(r['dlvr_req_nm']),
     chgOrd: Number(r['chg_ord']),
     prdctSno: String(r['prdct_sno']),
     companyId: String(r['company_id']),

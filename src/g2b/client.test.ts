@@ -130,3 +130,13 @@ test('성공하면 JSON 본문을 반환한다', async () => {
   const client = createG2bClient(config, async () => ({ ok: true, status: 200, json: async () => ({ a: 1 }) }));
   assert.deepEqual(await client.get('/getList'), { a: 1 });
 });
+
+test('개방표준서비스(OPENSTD)는 가이드대로 대문자 ServiceKey 이름으로 키를 보낸다 (다른 서비스는 serviceKey 그대로)', () => {
+  const env = { G2B_OPENSTD_SERVICE_KEY: 'o', G2B_OPENSTD_BASE_URL: 'https://o.test/api', G2B_CONTRACT_SERVICE_KEY: 'c', G2B_CONTRACT_BASE_URL: 'https://c.test/api' };
+  const open = new URL(createG2bClient(loadG2bConfig(env, 'OPENSTD')).buildUrl('/getList', { pageNo: 1 }));
+  assert.equal(open.searchParams.get('ServiceKey'), 'o');
+  assert.equal(open.searchParams.get('serviceKey'), null);
+  const contract = new URL(createG2bClient(loadG2bConfig(env, 'CONTRACT')).buildUrl('/getList'));
+  assert.equal(contract.searchParams.get('serviceKey'), 'c');
+  assert.equal(contract.searchParams.get('ServiceKey'), null);
+});
