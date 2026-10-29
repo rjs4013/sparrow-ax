@@ -152,3 +152,20 @@ test('잘못된 단위 · 날짜 · 업체는 400이다', async () => {
     assert.equal((await get(url)).statusCode, 400, url);
   }
 });
+
+test('수집 상태는 매일 증분 · 교차 검증 · 백필을 각각 보여 주고 교차 검증 메모도 보여 준다', async () => {
+  const { db, get } = setup();
+  const b = startRun(db, '2026-01-01', '2026-10-28', '2026-10-29T00:00:00Z', 'backfill');
+  finishRun(db, b, { status: 'success', fetched: 423, matched: 11, calls: 21, error: null }, '2026-10-29T00:01:00Z');
+  const d = startRun(db, '2026-10-29', '2026-10-29', '2026-10-30T00:00:00Z', 'daily');
+  finishRun(db, d, { status: 'success', fetched: 4200, matched: 1, calls: 7, error: null }, '2026-10-30T00:02:00Z');
+  const v = startRun(db, '2026-10-16', '2026-10-29', '2026-10-31T00:00:00Z', 'verify');
+  finishRun(db, v, { status: 'success', fetched: 40, matched: 2, calls: 4, error: null, note: '교차 검증: 새로 찾은 계약 1건' }, '2026-10-31T00:01:00Z');
+  const body = (await get('/')).body;
+  assert.match(body, /매일 증분\(등록일시\)/);
+  assert.match(body, /교차 검증/);
+  assert.match(body, /백필\(체결일자\)/);
+  assert.match(body, /새로 찾은 계약 1건/);
+  assert.match(body, /호출 7회/);
+  assert.ok(body.indexOf('매일 증분') < body.indexOf('교차 검증') && body.indexOf('교차 검증') < body.indexOf('백필'));
+});

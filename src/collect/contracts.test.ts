@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createMatcher, parseMonitoringConfig } from '../filters/contracts.ts';
 import { G2bResponseError } from '../g2b/response.ts';
-import { collectContracts, createFetcher, PRODUCT_NAME } from './contracts.ts';
+import { collectContracts, collectDay, createFetcher, PRODUCT_NAME } from './contracts.ts';
 
 const CAT = '43233205';
 const matcher = createMatcher(parseMonitoringConfig({
@@ -189,4 +189,41 @@ test('호출 상한을 넘기면 더 호출하지 않고 멈춘다', async () =>
   const client = fakeClient({ [SRCH]: [page([]), page([]), page([])] });
   await assert.rejects(run(client, '2026-01-01', '2026-03-31', 2), /호출 상한/);
   assert.equal(client.calls.length, 2);
+});
+
+const BASE = 'getCntrctInfoListThng';
+
+test('등록일시 하루 조회: 기본 조회를 등록일시 구간으로 호출하고 품명 필터는 걸지 않는다', async () => {
+  const client = fakeClient({ [BASE]: [page([])] });
+  const fetcher = createFetcher(client, { maxCalls: 10, sleep: noSleep });
+  await collectDay({ fetchPage: fetcher.fetchPage, matcher }, '2026-10-28');
+  assert.deepEqual(client.calls.map((c) => c.params), [
+    { inqryDiv: 1, inqryBgnDt: '202610280000', inqryEndDt: '202610282359', numOfRows: 999, pageNo: 1 },
+  ]);
+});
+
+test('등록일시 하루 조회: 체결일자가 빈 행은 버리고, 9개사 계약만 세부 조회해 저장 행을 만든다', async () => {
+  const client = fakeClient({
+    [BASE]: [page([
+      master(),
+      master({ untyCntrctNo: 'R26TE00000005', cntrctCnclsDate: '' }),
+      master({ untyCntrctNo: 'R26TE00000006', corpList: corp('주식회사 다른회사') }),
+    ])],
+    [DETAIL]: [page([detail('33333333')])],
+  });
+  const fetcher = createFetcher(client, { maxCalls: 10, sleep: noSleep });
+  const { contracts, stats } = await collectDay({ fetchPage: fetcher.fetchPage, matcher }, '2026-10-28');
+  assert.deepEqual(contracts.map((c) => c.untyNo), ['R26TE00000001']);
+  assert.deepEqual(stats, { fetched: 3, blankSkipped: 1, companyMatched: 1, categoryMismatch: 0 });
+  assert.equal(client.calls.filter((c) => c.path === DETAIL).length, 1);
+});
+
+test('등록일시 하루 조회: 여러 쪽을 이어서 받는다', async () => {
+  const client = fakeClient({
+    [BASE]: [page([master({ corpList: corp('없는회사1') })], 2), page([master({ untyCntrctNo: 'R26TE00000003', corpList: corp('없는회사2') })], 2)],
+  });
+  const fetcher = createFetcher(client, { maxCalls: 10, sleep: noSleep });
+  const { stats } = await collectDay({ fetchPage: fetcher.fetchPage, matcher }, '2026-10-28');
+  assert.equal(stats.fetched, 2);
+  assert.deepEqual(client.calls.map((c) => c.params['pageNo']), [1, 2]);
 });

@@ -76,8 +76,11 @@ export function listContracts(db: DatabaseSync, q: { from: string; to: string; c
   }));
 }
 
+export type RunKind = 'backfill' | 'daily' | 'verify';
+
 export interface RunRecord {
   id: number;
+  kind: RunKind;
   startedAt: string;
   finishedAt: string | null;
   rangeFrom: string;
@@ -87,31 +90,32 @@ export interface RunRecord {
   matched: number;
   calls: number;
   error: string | null;
+  // 실행이 남기는 참고 문구(예: 교차 검증이 새로 찾은 계약 수).
+  note: string | null;
 }
 
-export function startRun(db: DatabaseSync, rangeFrom: string, rangeTo: string, now: string): number {
+export function startRun(db: DatabaseSync, rangeFrom: string, rangeTo: string, now: string, kind: RunKind = 'backfill'): number {
   const res = db
-    .prepare("INSERT INTO collect_runs (started_at, range_from, range_to, status) VALUES (?, ?, ?, 'running')")
-    .run(now, rangeFrom, rangeTo);
+    .prepare("INSERT INTO collect_runs (started_at, range_from, range_to, status, kind) VALUES (?, ?, ?, 'running', ?)")
+    .run(now, rangeFrom, rangeTo, kind);
   return Number(res.lastInsertRowid);
 }
 
 export function finishRun(
   db: DatabaseSync,
   id: number,
-  result: { status: 'success' | 'failed'; fetched: number; matched: number; calls: number; error: string | null },
+  result: { status: 'success' | 'failed'; fetched: number; matched: number; calls: number; error: string | null; note?: string | null },
   now: string,
 ): void {
-  db.prepare('UPDATE collect_runs SET finished_at = ?, status = ?, fetched = ?, matched = ?, calls = ?, error = ? WHERE id = ?').run(
-    now, result.status, result.fetched, result.matched, result.calls, result.error, id,
+  db.prepare('UPDATE collect_runs SET finished_at = ?, status = ?, fetched = ?, matched = ?, calls = ?, error = ?, note = ? WHERE id = ?').run(
+    now, result.status, result.fetched, result.matched, result.calls, result.error, result.note ?? null, id,
   );
 }
 
-export function lastRun(db: DatabaseSync): RunRecord | null {
-  const r = db.prepare('SELECT * FROM collect_runs ORDER BY id DESC LIMIT 1').get();
-  if (!r) return null;
+function toRun(r: Record<string, unknown>): RunRecord {
   return {
     id: Number(r['id']),
+    kind: String(r['kind']) as RunKind,
     startedAt: String(r['started_at']),
     finishedAt: r['finished_at'] === null ? null : String(r['finished_at']),
     rangeFrom: String(r['range_from']),
@@ -121,5 +125,34 @@ export function lastRun(db: DatabaseSync): RunRecord | null {
     matched: Number(r['matched']),
     calls: Number(r['calls']),
     error: r['error'] === null ? null : String(r['error']),
+    note: r['note'] === null ? null : String(r['note']),
   };
+}
+
+export function lastRun(db: DatabaseSync): RunRecord | null {
+  const r = db.prepare('SELECT * FROM collect_runs ORDER BY id DESC LIMIT 1').get();
+  return r ? toRun(r) : null;
+}
+
+// 종류별로 가장 최근 실행(성공 여부와 무관)을 돌려준다. 한 번도 실행하지 않은 종류는 빠진다.
+export function lastRunByKind(db: DatabaseSync): Partial<Record<RunKind, RunRecord>> {
+  const out: Partial<Record<RunKind, RunRecord>> = {};
+  for (const r of db.prepare('SELECT * FROM collect_runs WHERE id IN (SELECT MAX(id) FROM collect_runs GROUP BY kind)').all()) {
+    const run = toRun(r);
+    out[run.kind] = run;
+  }
+  return out;
+}
+
+export function lastSuccessRun(db: DatabaseSync, kind: RunKind): RunRecord | null {
+  const r = db.prepare("SELECT * FROM collect_runs WHERE kind = ? AND status = 'success' ORDER BY range_to DESC, id DESC LIMIT 1").get(kind);
+  return r ? toRun(r) : null;
+}
+
+// 이미 저장된 (통합계약번호, 업체 id) 키를 `통합계약번호|업체 id` 형태로 돌려준다.
+export function existingKeys(db: DatabaseSync, keys: { untyNo: string; companyId: string }[]): Set<string> {
+  const stmt = db.prepare('SELECT 1 AS found FROM contracts WHERE unty_no = ? AND company_id = ?');
+  const found = new Set<string>();
+  for (const k of keys) if (stmt.get(k.untyNo, k.companyId)) found.add(`${k.untyNo}|${k.companyId}`);
+  return found;
 }

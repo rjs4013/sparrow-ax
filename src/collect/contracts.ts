@@ -7,6 +7,7 @@ import { field, G2bResponseError, isPlaceholderDemander, parseCorpList, parseDem
 export const PRODUCT_NAME = '트랜잭션보안및바이러스보호소프트웨어';
 
 const SEARCH = 'getCntrctInfoListThngPPSSrch';
+const BASE = 'getCntrctInfoListThng';
 const DETAIL = 'getCntrctInfoListThngDetail';
 // 실측한 페이지 크기 상한: 체결일자 검색 999, 세부 조회 100.
 const SEARCH_ROWS = 999;
@@ -73,22 +74,21 @@ function toAmount(text: string): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-// 체결일자 검색(월 단위) → 9개사 판정(기본 조회의 corpList) → 세부 조회로 분류번호 · 식별번호 판정.
-export async function collectContracts(
-  deps: { fetchPage: FetchPage; matcher: Matcher; log?: (message: string) => void },
-  range: { from: IsoDate; to: IsoDate },
-): Promise<{ contracts: ContractRow[]; stats: CollectStats }> {
+interface Deps {
+  fetchPage: FetchPage;
+  matcher: Matcher;
+  log?: (message: string) => void;
+}
+
+// 받은 행들을 9개사 판정(기본 조회의 corpList) → 세부 조회로 분류번호 · 식별번호 판정해 저장 행으로 바꾼다.
+// 같은 통합계약번호는 한 번만 센다(쪽 사이에 겹쳐 올 수 있다).
+function createProcessor(deps: Deps) {
   const { fetchPage, matcher } = deps;
   const stats: CollectStats = { fetched: 0, blankSkipped: 0, companyMatched: 0, categoryMismatch: 0 };
   const contracts: ContractRow[] = [];
   const seen = new Set<string>();
 
-  for (const month of monthRanges(range.from, range.to)) {
-    const rows = await fetchAll(fetchPage, SEARCH, {
-      inqryDiv: 1, inqryBgnDate: compact(month.from), inqryEndDate: compact(month.to), prdctClsfcNoNm: PRODUCT_NAME, numOfRows: SEARCH_ROWS,
-    });
-    deps.log?.(`${month.from} ~ ${month.to}: ${rows.length}건 수신`);
-
+  async function process(rows: Row[]): Promise<void> {
     for (const row of rows) {
       const untyNo = field(row, 'untyCntrctNo');
       if (seen.has(untyNo)) continue;
@@ -146,5 +146,30 @@ export async function collectContracts(
       }
     }
   }
-  return { contracts, stats };
+  return { process, contracts, stats };
+}
+
+// 체결일자 검색(달력 월 단위, 서버 품명 필터) — 백필과 교차 검증에 쓴다.
+export async function collectContracts(deps: Deps, range: { from: IsoDate; to: IsoDate }): Promise<{ contracts: ContractRow[]; stats: CollectStats }> {
+  const processor = createProcessor(deps);
+  for (const month of monthRanges(range.from, range.to)) {
+    const rows = await fetchAll(deps.fetchPage, SEARCH, {
+      inqryDiv: 1, inqryBgnDate: compact(month.from), inqryEndDate: compact(month.to), prdctClsfcNoNm: PRODUCT_NAME, numOfRows: SEARCH_ROWS,
+    });
+    deps.log?.(`${month.from} ~ ${month.to}: ${rows.length}건 수신`);
+    await processor.process(rows);
+  }
+  return { contracts: processor.contracts, stats: processor.stats };
+}
+
+// 등록일시 하루치(00:00~23:59) 기본 조회 — 매일 증분에 쓴다. 서버 품명 필터가 없어 하루 약 4,200건(5쪽 안팎)을 받고,
+// 그중 체결일자가 빈 사전 등록 행은 버린다. 늦게 등록되는 계약도 등록되는 날 받게 된다.
+export async function collectDay(deps: Deps, day: IsoDate): Promise<{ contracts: ContractRow[]; stats: CollectStats }> {
+  const processor = createProcessor(deps);
+  const rows = await fetchAll(deps.fetchPage, BASE, {
+    inqryDiv: 1, inqryBgnDt: `${compact(day)}0000`, inqryEndDt: `${compact(day)}2359`, numOfRows: SEARCH_ROWS,
+  });
+  deps.log?.(`${day}: ${rows.length}건 수신`);
+  await processor.process(rows);
+  return { contracts: processor.contracts, stats: processor.stats };
 }

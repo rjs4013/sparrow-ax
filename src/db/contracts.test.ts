@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { migrate, openDb } from './index.ts';
-import { finishRun, lastRun, listContracts, startRun, upsertContracts, type ContractRow } from './contracts.ts';
+import { existingKeys, finishRun, lastRun, lastRunByKind, lastSuccessRun, listContracts, startRun, upsertContracts, type ContractRow } from './contracts.ts';
 
 const row = (over: Partial<ContractRow> = {}): ContractRow => ({
   untyNo: 'R26TE00000001', companyId: 'sparrow', companyName: '주식회사 스패로우', bizNo: '1234567890',
@@ -18,7 +18,7 @@ const fresh = () => {
 
 test('마이그레이션이 계약 · 수집 실행 테이블을 만들고 두 번 돌려도 안전하다', () => {
   const db = openDb(':memory:');
-  assert.equal(migrate(db).length, 1);
+  assert.equal(migrate(db).length, 2);
   assert.deepEqual(migrate(db), []);
   const tables = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all().map((r) => r['name']);
   assert.ok(tables.includes('contracts') && tables.includes('collect_runs'));
@@ -82,6 +82,35 @@ test('수집 실행 기록: 시작 → 성공 / 실패 메시지, 가장 최근 
   finishRun(db, id2, { status: 'failed', fetched: 10, matched: 0, calls: 3, error: '나라장터 API 호출 실패: boom' }, '2026-10-30T00:00:10Z');
   assert.deepEqual(lastRun(db), {
     id: id2, startedAt: '2026-10-30T00:00:00Z', finishedAt: '2026-10-30T00:00:10Z', rangeFrom: '2026-10-01', rangeTo: '2026-10-28',
-    status: 'failed', fetched: 10, matched: 0, calls: 3, error: '나라장터 API 호출 실패: boom',
+    status: 'failed', fetched: 10, matched: 0, calls: 3, error: '나라장터 API 호출 실패: boom', kind: 'backfill', note: null,
   });
+});
+
+test('실행 종류(backfill · daily · verify)와 메모를 기록하고, 종류별 최근 기록 · 마지막 성공 기록을 읽는다', () => {
+  const db = fresh();
+  assert.deepEqual(lastRunByKind(db), {});
+  assert.equal(lastSuccessRun(db, 'daily'), null);
+  const ok = { status: 'success' as const, fetched: 1, matched: 1, calls: 5, error: null };
+  const d1 = startRun(db, '2026-10-28', '2026-10-28', '2026-10-29T00:00:00Z', 'daily');
+  finishRun(db, d1, ok, '2026-10-29T00:01:00Z');
+  const d2 = startRun(db, '2026-10-29', '2026-10-29', '2026-10-30T00:00:00Z', 'daily');
+  finishRun(db, d2, { ...ok, status: 'failed', error: 'boom' }, '2026-10-30T00:00:30Z');
+  const v = startRun(db, '2026-10-16', '2026-10-29', '2026-10-30T01:00:00Z', 'verify');
+  finishRun(db, v, { ...ok, note: '교차 검증: 새로 찾은 계약 2건' }, '2026-10-30T01:01:00Z');
+  const byKind = lastRunByKind(db);
+  assert.equal(byKind.daily?.id, d2);
+  assert.equal(byKind.daily?.status, 'failed');
+  assert.equal(byKind.verify?.note, '교차 검증: 새로 찾은 계약 2건');
+  assert.equal(byKind.backfill, undefined);
+  assert.equal(lastSuccessRun(db, 'daily')?.rangeTo, '2026-10-28');
+  assert.equal(lastRun(db)?.kind, 'verify');
+});
+
+test('existingKeys는 이미 저장된 (통합계약번호, 업체 id)만 돌려준다', () => {
+  const db = fresh();
+  upsertContracts(db, [row({ untyNo: 'A', companyId: 'sparrow' }), row({ untyNo: 'A', companyId: 'ssr' })], '2026-10-29T00:00:00Z');
+  const keys = existingKeys(db, [
+    { untyNo: 'A', companyId: 'sparrow' }, { untyNo: 'A', companyId: 'nilesoft' }, { untyNo: 'B', companyId: 'sparrow' },
+  ]);
+  assert.deepEqual([...keys], ['A|sparrow']);
 });

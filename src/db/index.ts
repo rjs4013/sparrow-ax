@@ -49,6 +49,14 @@ export const migrations: Migration[] = [
       );
     `,
   },
+  {
+    id: '0002_run_kind',
+    // 실행 종류: backfill(체결일자 백필), daily(등록일시 증분, 하루 1행), verify(체결일자 교차 검증). 기존 행은 백필이다.
+    sql: `
+      ALTER TABLE collect_runs ADD COLUMN kind TEXT NOT NULL DEFAULT 'backfill';
+      ALTER TABLE collect_runs ADD COLUMN note TEXT;
+    `,
+  },
 ];
 
 export function openDb(path: string): DatabaseSync {

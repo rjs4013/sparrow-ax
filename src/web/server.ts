@@ -1,6 +1,6 @@
 import Fastify from 'fastify';
 import type { DatabaseSync } from 'node:sqlite';
-import { lastRun, listContracts, type ContractRow, type RunRecord } from '../db/contracts.ts';
+import { lastRunByKind, listContracts, type ContractRow, type RunKind, type RunRecord } from '../db/contracts.ts';
 import { addDays, periodRange, shiftPeriod, todayKst, type PeriodView } from '../filters/dates.ts';
 
 export interface ServerOptions {
@@ -32,7 +32,7 @@ main{max-width:1200px;margin:0 auto;padding:20px 16px 48px}h1{font-size:20px;mar
 .tabs a,.nav a{padding:4px 12px;border:1px solid var(--line);border-radius:6px;color:var(--fg);text-decoration:none;background:var(--card)}
 .tabs a.on{background:var(--accent);color:#fff;border-color:var(--accent)}
 select,button{font:inherit;padding:4px 8px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--fg)}
-.status-success{color:var(--ok);font-weight:600}.status-failed{color:var(--bad);font-weight:600}.status-running{color:var(--warn);font-weight:600}
+.status-success{color:var(--ok);font-weight:600}.status-failed{color:var(--bad);font-weight:600}.status-running{color:var(--warn);font-weight:600}.runline{padding:6px 0;border-top:1px solid var(--line)}.runline:first-of-type{border-top:0}
 .tablewrap{overflow-x:auto}table{border-collapse:collapse;width:100%;min-width:900px}
 th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top}th{font-size:12px;color:var(--muted);font-weight:600;white-space:nowrap}
 td.num{text-align:right;white-space:nowrap}.chip{display:inline-block;padding:1px 8px;border-radius:999px;background:var(--chip);font-size:12px;margin:0 4px 2px 0;white-space:nowrap}
@@ -51,13 +51,22 @@ const kst = (iso: string): string => {
   return Number.isNaN(ms) ? iso : `${new Date(ms + 9 * 3_600_000).toISOString().slice(0, 16).replace('T', ' ')} 한국시간`;
 };
 
-function runBox(run: RunRecord | null): string {
-  if (run === null) return '<div class="card muted">수집 기록이 없습니다. <code>npm run collect</code>로 수집을 먼저 실행하세요.</div>';
+const KIND_LABEL: Record<RunKind, string> = { backfill: '백필(체결일자)', daily: '매일 증분(등록일시)', verify: '교차 검증' };
+const KINDS: RunKind[] = ['daily', 'verify', 'backfill'];
+
+function runLine(run: RunRecord): string {
   const label = { success: '성공', failed: '실패', running: '진행 중(또는 중단됨)' }[run.status];
+  const range = run.rangeFrom === run.rangeTo ? run.rangeFrom : `${run.rangeFrom} ~ ${run.rangeTo}`;
   const detail = `수신 ${run.fetched}건 · 9개사 계약 ${run.matched}건 저장 · 호출 ${run.calls}회`;
-  return `<div class="card"><div class="row"><b>마지막 수집</b><span class="status-${run.status}">${label}</span>
-<span>${esc(run.rangeFrom)} ~ ${esc(run.rangeTo)}</span><span class="muted">${esc(kst(run.finishedAt ?? run.startedAt))}</span></div>
-<div class="muted">${esc(detail)}</div>${run.error === null ? '' : `<div class="status-failed">${esc(run.error)}</div>`}</div>`;
+  return `<div class="runline"><div class="row"><b>${esc(KIND_LABEL[run.kind])}</b><span class="status-${run.status}">${label}</span>
+<span>${esc(range)}</span><span class="muted">${esc(kst(run.finishedAt ?? run.startedAt))}</span></div>
+<div class="muted">${esc(detail)}${run.note === null ? '' : ` · ${esc(run.note)}`}</div>${run.error === null ? '' : `<div class="status-failed">${esc(run.error)}</div>`}</div>`;
+}
+
+function runBox(runs: Partial<Record<RunKind, RunRecord>>): string {
+  const lines = KINDS.flatMap((k) => (runs[k] ? [runLine(runs[k])] : []));
+  if (lines.length === 0) return '<div class="card muted">수집 기록이 없습니다. <code>npm run collect</code>로 수집을 먼저 실행하세요.</div>';
+  return `<div class="card"><div class="muted">마지막 수집 상태</div>${lines.join('')}</div>`;
 }
 
 function productCell(r: ContractRow): string {
@@ -83,7 +92,7 @@ function demanderCell(r: ContractRow): string {
 
 function page(opts: {
   view: PeriodView; date: string; company: string; companies: { id: string; label: string }[];
-  range: { from: string; to: string }; rows: ContractRow[]; run: RunRecord | null;
+  range: { from: string; to: string }; rows: ContractRow[]; runs: Partial<Record<RunKind, RunRecord>>;
 }): string {
   const { view, date, company, range, rows } = opts;
   // 공동수급 계약은 업체별 행에 같은 금액이 들어 있으므로 계약(통합계약번호) 단위로 한 번만 더한다.
@@ -100,7 +109,7 @@ function page(opts: {
   return `<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>경쟁사 계약 모니터링</title><style>${CSS}</style></head><body><main>
 <h1>경쟁사 계약 모니터링</h1>
-${runBox(opts.run)}
+${runBox(opts.runs)}
 <div class="card"><form method="get" action="/" class="row"><input type="hidden" name="view" value="${view}"><input type="hidden" name="date" value="${esc(date)}">
 <span class="tabs row">${tabs}</span>
 <span class="nav row"><a href="${esc(href(view, shiftPeriod(view, date, -1), company))}">← 이전</a><a href="${esc(href(view, shiftPeriod(view, date, 1), company))}">다음 →</a></span>
@@ -137,7 +146,7 @@ export function buildServer(opts: ServerOptions = {}) {
         .type('text/html; charset=utf-8')
         .header('content-security-policy', "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'")
         .header('x-content-type-options', 'nosniff')
-        .send(page({ view, date, company, companies, range, rows, run: lastRun(db) }));
+        .send(page({ view, date, company, companies, range, rows, runs: lastRunByKind(db) }));
     });
   }
   return app;
