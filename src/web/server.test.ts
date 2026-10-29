@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { finishRun, startRun, upsertContracts, type ContractRow } from '../db/contracts.ts';
+import { upsertAwards, type AwardRow } from '../db/awards.ts';
 import { upsertBids, type BidRow } from '../db/bids.ts';
 import { upsertDeliveries, type DeliveryRow } from '../db/deliveries.ts';
 import ExcelJS from 'exceljs';
@@ -126,19 +127,21 @@ test('결과가 없으면 빈 상태 문구를 보여 준다', async () => {
 
 test('수집 실행 상태: 기록 없음 / 성공 / 실패 사유', async () => {
   const { db, get } = setup();
-  assert.match((await get('/')).body, /수집 기록이 없습니다/);
+  assert.match((await get('/admin')).body, /수집 기록이 없습니다/);
   const ok = startRun(db, '2026-01-01', '2026-10-28', '2026-10-29T00:00:00Z');
   finishRun(db, ok, { status: 'success', fetched: 420, matched: 11, calls: 21, error: null }, '2026-10-29T00:01:00Z');
-  const success = (await get('/')).body;
+  const success = (await get('/admin')).body;
   assert.match(success, /성공/);
   assert.match(success, /2026-01-01 ~ 2026-10-28/);
   assert.match(success, /호출 21회/);
   assert.match(success, /2026-10-29 09:01 한국시간/);
   const bad = startRun(db, '2026-10-01', '2026-10-28', '2026-10-30T00:00:00Z');
   finishRun(db, bad, { status: 'failed', fetched: 0, matched: 0, calls: 3, error: '나라장터 API 호출 실패: <b>x</b>' }, '2026-10-30T00:00:05Z');
-  const failed = (await get('/')).body;
+  const failed = (await get('/admin')).body;
   assert.match(failed, /실패/);
   assert.match(failed, /나라장터 API 호출 실패: &lt;b&gt;x&lt;\/b&gt;/);
+  // 수집 상태는 관리 화면에만 보인다(사람 요구, 2026-10-29).
+  for (const url of ['/', '/deliveries', '/bids']) assert.doesNotMatch((await get(url)).body, /마지막 수집 상태|한국시간|수집 기록이 없습니다/, url);
 });
 
 test('이전 · 다음 링크와 단위 전환 링크를 만든다', async () => {
@@ -164,7 +167,7 @@ test('수집 상태는 매일 증분 · 교차 검증 · 백필을 각각 보여
   finishRun(db, d, { status: 'success', fetched: 4200, matched: 1, calls: 7, error: null }, '2026-10-30T00:02:00Z');
   const v = startRun(db, '2026-10-16', '2026-10-29', '2026-10-31T00:00:00Z', 'verify');
   finishRun(db, v, { status: 'success', fetched: 40, matched: 2, calls: 4, error: null, note: '교차 검증: 새로 찾은 계약 1건' }, '2026-10-31T00:01:00Z');
-  const body = (await get('/')).body;
+  const body = (await get('/admin')).body;
   assert.match(body, /매일 증분\(등록일시\)/);
   assert.match(body, /교차 검증/);
   assert.match(body, /백필\(체결일자\)/);
@@ -248,25 +251,26 @@ test('납품요구 화면: 데이터의 HTML은 이스케이프되고, 빈 상�
 
   const { db, get } = setupD();
   assert.match((await get('/deliveries')).body, /해당 기간에 수집된 납품요구가 없습니다/);
-  assert.match((await get('/deliveries')).body, /납품요구 수집 기록이 없습니다/);
+  assert.match((await get('/admin')).body, /납품요구 수집 기록이 없습니다/);
   const r = startRun(db, '2026-01-01', '2026-10-28', '2026-10-29T00:00:00Z', 'dlvr_backfill');
   finishRun(db, r, { status: 'success', fetched: 1288, matched: 13, calls: 2, error: null }, '2026-10-29T00:01:00Z');
-  const status = (await get('/deliveries')).body;
+  const status = (await get('/admin')).body;
   assert.match(status, /납품요구 백필/);
   assert.match(status, /납품요구 13행 저장/);
   for (const url of ['/deliveries?view=year', '/deliveries?date=abc', '/deliveries?company=nope']) assert.equal((await get(url)).statusCode, 400, url);
 });
 
-test('두 화면은 서로 이동하는 링크를 갖고, 각 화면은 자기 수집 상태만 보여 준다', async () => {
+test('계약 · 납품요구 화면은 서로 이동하는 링크를 갖고 수집 상태는 보여 주지 않는다 (수집 상태는 관리 화면에만)', async () => {
   const { db, get } = setupD();
   const b = startRun(db, '2026-01-01', '2026-10-28', '2026-10-29T00:00:00Z', 'backfill');
   finishRun(db, b, { status: 'success', fetched: 423, matched: 11, calls: 21, error: null }, '2026-10-29T00:01:00Z');
   const contracts = (await get('/?view=month&date=2026-06-15&company=sparrow')).body;
   assert.match(contracts, /href="\/deliveries\?view=month&amp;date=2026-06-15&amp;company=sparrow"/);
-  assert.match(contracts, /백필\(체결일자\)/);
+  assert.doesNotMatch(contracts, /백필\(체결일자\)/);
   const deliveries = (await get('/deliveries?view=month&date=2026-06-15')).body;
   assert.match(deliveries, /href="\/\?view=month&amp;date=2026-06-15"/);
   assert.doesNotMatch(deliveries, /백필\(체결일자\)/);
+  assert.match((await get('/admin')).body, /백필\(체결일자\)/);
 });
 
 // ---- 엑셀 내보내기 ----
@@ -435,10 +439,10 @@ test('입찰공고 화면: 데이터의 HTML은 이스케이프되고, 빈 상�
 
   const { db, get } = setupB();
   assert.match((await get('/bids')).body, /해당 기간에 수집된 입찰공고가 없습니다/);
-  assert.match((await get('/bids')).body, /입찰공고 수집 기록이 없습니다/);
+  assert.match((await get('/admin')).body, /입찰공고 수집 기록이 없습니다/);
   const r = startRun(db, '2026-10-28', '2026-10-28', '2026-10-29T00:00:00Z', 'bid_daily');
   finishRun(db, r, { status: 'success', fetched: 1906, matched: 7, calls: 4, error: null }, '2026-10-29T00:01:00Z');
-  const status = (await get('/bids')).body;
+  const status = (await get('/admin')).body;
   assert.match(status, /입찰공고 매일/);
   assert.match(status, /수신 1906건 · 키워드 적중 7건 저장/);
   for (const url of ['/bids?view=year', '/bids?date=abc', '/bids?keyword=nope', '/bids?demander=' + 'x'.repeat(201)]) assert.equal((await get(url)).statusCode, 400, url);
@@ -450,6 +454,7 @@ test('세 화면은 서로 이동하는 링크를 갖고, 입찰공고 화면에
     const body = (await get(url)).body;
     assert.match(body, /href="\/bids\?view=month&amp;date=2026-10-29"[^>]*>입찰공고/);
     assert.match(body, /href="\/\?view=month&amp;date=2026-10-29"[^>]*>계약/);
+    assert.match(body, /href="\/admin"[^>]*>관리/);
   }
   assert.doesNotMatch((await get('/bids')).body, /export\.xlsx/);
 });
@@ -459,4 +464,82 @@ test('입찰공고 화면: 고른 수요기관이 그 기간에 없어도 선택
   const body = (await get('/bids?date=2026-12-01&demander=' + encodeURIComponent('가 기관'))).body;
   assert.match(body, /<option value="가 기관" selected>/);
   assert.match(body, /0건/);
+});
+
+// ---- 관리 화면 ----
+test('관리 화면: 계약 · 납품요구 · 입찰공고 · 낙찰정보 수집 상태를 묶음별로 보여 주고, 접근 제한 없이 링크로 들어간다', async () => {
+  const { db, get } = setupB();
+  const res = await get('/admin');
+  assert.equal(res.statusCode, 200);
+  assert.match(res.headers['content-type'] as string, /text\/html/);
+  for (const title of ['계약(경쟁사) 수집', '납품요구 수집', '입찰공고 수집', '낙찰정보 수집']) assert.match(res.body, new RegExp(title.replace(/[()]/g, '\\$&')), title);
+  assert.equal((res.body.match(/수집 기록이 없습니다/g) ?? []).length, 4);
+  const a = startRun(db, '2026-10-28', '2026-10-28', '2026-10-29T00:00:00Z', 'award_daily');
+  finishRun(db, a, { status: 'success', fetched: 45484, matched: 5, calls: 46, error: null, note: '쪽 이동 확인: 2번 받음, 고유 45484행' }, '2026-10-29T00:03:00Z');
+  const after = (await get('/admin')).body;
+  assert.match(after, /낙찰정보 매일/);
+  assert.match(after, /수신 45484행 · 키워드 적중 공고 5건 저장/);
+  assert.match(after, /쪽 이동 확인/);
+  assert.equal((after.match(/수집 기록이 없습니다/g) ?? []).length, 3);
+  assert.match(after, /href="\/"[^>]*>계약/);
+});
+
+// ---- 낙찰정보 (입찰공고 화면의 두 번째 목록) ----
+const aRow = (over: Partial<AwardRow> = {}): AwardRow => ({
+  bidNtceNo: 'R26BK01000001', bidNtceOrd: '000', title: '소스코드 보안약점 진단 용역', workKind: '용역', demanderName: '한국정보보호진흥원', demanderCode: '1234567',
+  estimatedPrice: 90_000_000, reservePrice: 88_000_000, baseAmount: 89_000_000, opening: '2026-10-27 11:00', result: '개찰완료', bidderCount: 3,
+  winnerName: '주식회사 낙찰', winnerAmount: 80_000_000, winnerRate: 89.9, winnerDate: '2026-10-28', keywords: ['소스코드'], ...over,
+});
+
+test('입찰공고 화면: 낙찰정보 목록에 공고명 · 수요처 · 기초금액 · 낙찰처 · 낙찰금액 · 공고 링크를 보여 준다', async () => {
+  const { db, get } = setupB([bRow()]);
+  upsertAwards(db, [aRow(), aRow({ bidNtceNo: 'OLD', opening: '2026-09-30 11:00', title: '지난달 낙찰' })], '2026-10-29T00:00:00Z');
+  const body = (await get('/bids')).body;
+  assert.match(body, /<h2>낙찰정보<\/h2>/);
+  assert.match(body, /주식회사 낙찰/);
+  assert.match(body, /89,000,000/);
+  assert.match(body, /80,000,000/);
+  assert.match(body, /낙찰률 89\.9%/);
+  assert.match(body, /2026-10-27 11:00/);
+  assert.match(body, /href="https:\/\/www\.g2b\.go\.kr\/x\?bidno=R26BK01000001"/);
+  assert.doesNotMatch(body, /지난달 낙찰/);
+});
+
+test('입찰공고 화면: 낙찰자 미확정 · 유찰 · 공고 없는 단독 낙찰을 구분해서 보여 준다', async () => {
+  const { db, get } = setupB([bRow()]);
+  upsertAwards(db, [
+    aRow({ bidNtceNo: 'P', winnerName: '', winnerAmount: null, winnerRate: null, winnerDate: '' }),
+    aRow({ bidNtceNo: 'F', result: '유찰', winnerName: '', winnerAmount: null, winnerRate: null, winnerDate: '' }),
+    aRow({ bidNtceNo: 'ALONE' }),
+  ], '2026-10-29T00:00:00Z');
+  const body = (await get('/bids')).body;
+  assert.match(body, /낙찰자 미확정/);
+  assert.match(body, /유찰/);
+  assert.match(body, /공고 미수집\(단독\)/);
+});
+
+test('입찰공고 화면: 수요기관 · 키워드 조건이 낙찰정보에도 적용되고 요약에 낙찰 건수가 들어간다', async () => {
+  const { db, get } = setupB([bRow({ demanderName: '가 기관' })]);
+  upsertAwards(db, [
+    aRow({ bidNtceNo: 'A', title: '가 낙찰', demanderName: '가 기관', keywords: ['솔루션'] }),
+    aRow({ bidNtceNo: 'B', title: '나 낙찰', demanderName: '나 기관', keywords: ['소스코드'] }),
+  ], '2026-10-29T00:00:00Z');
+  const all = (await get('/bids')).body;
+  assert.match(all, /1건 · 수요기관 1곳 · 낙찰 2건/);
+  const org = (await get('/bids?demander=' + encodeURIComponent('가 기관'))).body;
+  assert.match(org, /가 낙찰/);
+  assert.doesNotMatch(org, /나 낙찰/);
+  const kw = (await get('/bids?keyword=' + encodeURIComponent('소스코드'))).body;
+  assert.match(kw, /나 낙찰/);
+  assert.doesNotMatch(kw, /가 낙찰/);
+  assert.match(all, /<option value="나 기관">/);
+});
+
+test('입찰공고 화면: 낙찰정보의 HTML도 이스케이프되고, 낙찰 목록이 비면 빈 상태 문구를 보여 준다', async () => {
+  const { db, get } = setupB([bRow()]);
+  assert.match((await get('/bids')).body, /해당 기간에 수집된 낙찰정보가 없습니다/);
+  upsertAwards(db, [aRow({ title: '<script>alert(1)</script>', winnerName: '<img src=x onerror=alert(2)>' })], '2026-10-29T00:00:00Z');
+  const body = (await get('/bids')).body;
+  assert.doesNotMatch(body, /<script>alert\(1\)/);
+  assert.doesNotMatch(body, /<img src=x/);
 });
