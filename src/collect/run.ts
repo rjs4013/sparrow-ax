@@ -2,7 +2,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { existingKeys, finishRun, lastSuccessRun, startRun, upsertContracts, type RunKind } from '../db/contracts.ts';
 import { upsertAwards } from '../db/awards.ts';
 import { upsertBids } from '../db/bids.ts';
-import { upsertDeliveries } from '../db/deliveries.ts';
+import { deliveryKey, existingDeliveryKeys, upsertDeliveries } from '../db/deliveries.ts';
 import type { Matcher } from '../filters/contracts.ts';
 import { addDays, collectionRange, todayKst, type IsoDate } from '../filters/dates.ts';
 import { collectContracts, collectDay, createFetcher, type FetchPage } from './contracts.ts';
@@ -103,9 +103,9 @@ export async function runDaily(opts: RunOptions & { today: IsoDate; from?: IsoDa
 }
 
 export interface VerifyResult extends RunResult {
-  // 이미 저장된 것에 없던 9개사 계약 수.
+  // 이미 저장된 것에 없던 9개사 계약(납품요구 검증이면 납품요구 행) 수.
   newlyFound: number;
-  // 그중 등록일이 증분이 이미 처리한 구간 안이라 증분이 놓친 것으로 볼 수 있는 수. 증분 성공 기록이 없으면 판정할 수 없어 null.
+  // 그중 매일 수집이 이미 지나가 놓친 것으로 볼 수 있는 수(계약은 등록일, 납품요구는 접수일자 기준). 매일 수집 성공 기록이 없으면 판정할 수 없어 null.
   missed: number | null;
 }
 
@@ -167,6 +167,33 @@ export async function runDeliveryDaily(opts: RunOptions & { today: IsoDate }): P
   const range = collectionRange(last.rangeTo, opts.today);
   if (range === null) return { status: 'success', fetched: 0, matched: 0, calls: 0, error: null };
   return runDeliveries({ ...opts, range: { from: addDays(range.from, -LOOKBACK_DAYS), to: range.to }, kind: 'dlvr_daily' });
+}
+
+// 납품요구 교차 검증(접수일자 방식): 최근 days일을 다시 받아 저장하고, DB에 없던 행이 몇 행인지 실행 기록 메모에 남긴다.
+// 매일 수집과 같은 원천을 보므로 찾는 것은 매일 수집의 되돌아보기(LOOKBACK_DAYS)를 넘겨 늦게 등록된 행이다.
+// "놓친 것"은 접수일자가 매일 수집의 다음 시작일(마지막 성공일 + 1 - LOOKBACK_DAYS)보다 앞선 새 행이다(그 뒤는 다음 매일 수집이 받는다).
+export async function runDeliveryVerify(opts: RunOptions & { today: IsoDate; days: number }): Promise<VerifyResult> {
+  const now = opts.now ?? (() => new Date().toISOString());
+  const range = { from: addDays(opts.today, -opts.days), to: addDays(opts.today, -1) };
+  const runId = startRun(opts.db, range.from, range.to, now(), 'dlvr_verify');
+  const fetcher = makeFetcher(opts);
+  let result: VerifyResult;
+  let note: string | null = null;
+  try {
+    const { rows, stats } = await collectDeliveries({ fetchPage: fetcher.fetchPage, matcher: opts.matcher, ...(opts.log ? { log: opts.log } : {}) }, range);
+    const known = existingDeliveryKeys(opts.db, rows);
+    const fresh = rows.filter((r) => !known.has(deliveryKey(r)));
+    const covered = lastSuccessRun(opts.db, 'dlvr_daily')?.rangeTo ?? null;
+    // 다음 매일 수집은 covered + 1 - LOOKBACK_DAYS 일부터 다시 받으므로 그 이후 접수분은 어차피 받는다.
+    const missed = covered === null ? null : fresh.filter((r) => r.receivedDate < addDays(covered, 1 - LOOKBACK_DAYS)).length;
+    upsertDeliveries(opts.db, rows, now());
+    result = { status: 'success', fetched: stats.fetched, matched: rows.length, calls: fetcher.calls(), error: null, newlyFound: fresh.length, missed };
+    note = `교차 검증: 새로 찾은 납품요구 ${fresh.length}행` + (missed === null ? ' (매일 수집 기록이 없어 놓침 여부는 판정 불가)' : ` · 그중 매일 수집이 놓친 것 ${missed}행`);
+  } catch (err) {
+    result = { status: 'failed', fetched: 0, matched: 0, calls: fetcher.calls(), error: message(err), newlyFound: 0, missed: null };
+  }
+  finishRun(opts.db, runId, { ...result, note }, now());
+  return result;
 }
 
 // 날짜(공고일 · 개찰일) 단위로 이어 받는 수집의 공통 틀: 마지막 성공한 날 다음 날부터 어제까지를 하루씩 받고

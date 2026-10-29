@@ -260,6 +260,16 @@ test('납품요구 화면: 데이터의 HTML은 이스케이프되고, 빈 상�
   for (const url of ['/deliveries?view=year', '/deliveries?date=abc', '/deliveries?company=nope']) assert.equal((await get(url)).statusCode, 400, url);
 });
 
+test('관리 화면: 납품요구 교차 검증의 마지막 실행과 메모가 납품요구 수집 묶음에 보인다', async () => {
+  const { db, get } = setupD();
+  const v = startRun(db, '2026-10-16', '2026-10-29', '2026-10-30T00:00:00Z', 'dlvr_verify');
+  finishRun(db, v, { status: 'success', fetched: 30, matched: 5, calls: 1, error: null, note: '교차 검증: 새로 찾은 납품요구 2행 · 그중 매일 수집이 놓친 것 1행' }, '2026-10-30T00:01:00Z');
+  const body = (await get('/admin')).body;
+  assert.match(body, /납품요구 교차 검증/);
+  assert.match(body, /새로 찾은 납품요구 2행 · 그중 매일 수집이 놓친 것 1행/);
+  assert.doesNotMatch(body, /납품요구 수집 기록이 없습니다/);
+});
+
 test('계약 · 납품요구 화면은 서로 이동하는 링크를 갖고 수집 상태는 보여 주지 않는다 (수집 상태는 관리 화면에만)', async () => {
   const { db, get } = setupD();
   const b = startRun(db, '2026-01-01', '2026-10-28', '2026-10-29T00:00:00Z', 'backfill');

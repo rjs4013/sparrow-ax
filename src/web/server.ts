@@ -72,12 +72,12 @@ const kst = (iso: string): string => {
 
 const KIND_LABEL: Record<RunKind, string> = {
   backfill: '백필(체결일자)', daily: '매일 증분(등록일시)', verify: '교차 검증',
-  dlvr_backfill: '납품요구 백필(접수일자)', dlvr_daily: '납품요구 매일(접수일자)', bid_daily: '입찰공고 매일(공고일시)', award_daily: '낙찰정보 매일(개찰일시)',
+  dlvr_backfill: '납품요구 백필(접수일자)', dlvr_daily: '납품요구 매일(접수일자)', dlvr_verify: '납품요구 교차 검증', bid_daily: '입찰공고 매일(공고일시)', award_daily: '낙찰정보 매일(개찰일시)',
 };
 // 관리 화면의 수집 상태 묶음.
 const RUN_GROUPS: { title: string; kinds: RunKind[]; empty: string }[] = [
   { title: '계약(경쟁사) 수집', kinds: ['daily', 'verify', 'backfill'], empty: '수집 기록이 없습니다. <code>npm run collect</code>로 수집을 먼저 실행하세요.' },
-  { title: '납품요구 수집', kinds: ['dlvr_daily', 'dlvr_backfill'], empty: '납품요구 수집 기록이 없습니다. <code>npm run collect -- --mode dlvr-backfill</code>로 수집을 먼저 실행하세요.' },
+  { title: '납품요구 수집', kinds: ['dlvr_daily', 'dlvr_verify', 'dlvr_backfill'], empty: '납품요구 수집 기록이 없습니다. <code>npm run collect -- --mode dlvr-backfill</code>로 수집을 먼저 실행하세요.' },
   { title: '입찰공고 수집', kinds: ['bid_daily'], empty: '입찰공고 수집 기록이 없습니다. <code>npm run collect -- --mode bid-daily</code>로 수집을 먼저 실행하세요.' },
   { title: '낙찰정보 수집', kinds: ['award_daily'], empty: '낙찰정보 수집 기록이 없습니다. <code>npm run collect -- --mode award-daily</code>로 수집을 먼저 실행하세요.' },
 ];

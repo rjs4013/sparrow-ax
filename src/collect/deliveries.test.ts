@@ -7,7 +7,7 @@ import { createMatcher, parseMonitoringConfig } from '../filters/contracts.ts';
 import { G2bResponseError } from '../g2b/response.ts';
 import { createFetcher, PRODUCT_NAME } from './contracts.ts';
 import { collectDeliveries } from './deliveries.ts';
-import { runDeliveryBackfill, runDeliveryDaily } from './run.ts';
+import { runDeliveryBackfill, runDeliveryDaily, runDeliveryVerify } from './run.ts';
 
 const matcher = createMatcher(parseMonitoringConfig({
   categoryCodes: ['43233205'],
@@ -155,6 +155,68 @@ test('매일: 마지막 성공일 다음 날부터 어제까지에 최근 3일�
   const next = fakeClient([page([])]);
   await runDeliveryDaily({ db, client: next, matcher, today: '2026-10-27', maxCalls: 10, sleep: noSleep });
   assert.deepEqual([next.calls[0]?.params['inqryBgnDate'], next.calls[0]?.params['inqryEndDate']], ['20261022', '20261026']);
+});
+
+const verify = (db: ReturnType<typeof setup>, client: ReturnType<typeof fakeClient>, days = 14) =>
+  runDeliveryVerify({ db, client, matcher, today: '2026-10-30', days, maxCalls: 10, sleep: noSleep, now: () => '2026-10-30T00:00:00Z' });
+
+test('교차 검증: 최근 N일을 다시 받아 저장하고, 새 행 중 다음 매일 수집의 되돌아보기 앞에 있는 것만 놓친 것으로 센다', async () => {
+  const db = setup();
+  await runDeliveryBackfill({ db, client: fakeClient([page([item({ dlvrReqNo: 'R1', dlvrReqRcptDate: '2026-10-20' })])]), matcher, range: { from: '2026-10-01', to: '2026-10-24' }, maxCalls: 10, sleep: noSleep });
+  seed(db, 'dlvr_daily', '2026-10-22', '2026-10-25');
+  const client = fakeClient([page([
+    item({ dlvrReqNo: 'R1', dlvrReqRcptDate: '2026-10-20' }),
+    item({ dlvrReqNo: 'R2', dlvrReqRcptDate: '2026-10-22' }),
+    item({ dlvrReqNo: 'R3', dlvrReqRcptDate: '2026-10-23' }),
+    item({ dlvrReqNo: 'R4', dlvrReqRcptDate: '2026-10-28' }),
+  ])]);
+  const r = await verify(db, client);
+  assert.equal(r.status, 'success');
+  // 기본 14일: 10-16 ~ 어제(10-29), 한 달 안이라 한 번 호출
+  assert.deepEqual(client.calls.map((c) => [c.params['inqryBgnDate'], c.params['inqryEndDate']]), [['20261016', '20261029']]);
+  // 매일 수집의 마지막 성공일 10-25 → 다음 매일 수집은 10-23부터 받는다. 10-22(R2)는 그보다 앞서 놓친 것, 10-23(R3) · 10-28(R4)은 어차피 받는다.
+  assert.deepEqual([r.fetched, r.matched, r.newlyFound, r.missed], [4, 4, 3, 1]);
+  assert.equal(listDeliveries(db, { from: '2026-10-01', to: '2026-10-31' }).length, 4);
+  const run = lastRunByKind(db).dlvr_verify!;
+  assert.deepEqual([run.status, run.rangeFrom, run.rangeTo, run.fetched, run.matched], ['success', '2026-10-16', '2026-10-29', 4, 4]);
+  assert.match(run.note ?? '', /새로 찾은 납품요구 3행/);
+  assert.match(run.note ?? '', /놓친 것 1행/);
+});
+
+test('교차 검증: 변경 차수가 새로 나타난 행도 새 행이고, 모두 이미 있으면 0행이다', async () => {
+  const db = setup();
+  await runDeliveryBackfill({ db, client: fakeClient([page([item({ dlvrReqNo: 'R1' })])]), matcher, range: { from: '2026-06-01', to: '2026-06-30' }, maxCalls: 10, sleep: noSleep });
+  const same = await verify(db, fakeClient([page([item({ dlvrReqNo: 'R1' })])]), 29);
+  assert.deepEqual([same.newlyFound, same.missed], [0, null]);
+  const changed = await verify(db, fakeClient([page([item({ dlvrReqNo: 'R1' }), item({ dlvrReqNo: 'R1', dlvrReqChgOrd: '1' })])]), 29);
+  assert.equal(changed.newlyFound, 1);
+});
+
+test('교차 검증: 매일 수집 기록이 없으면 놓침 여부를 판정하지 않고 그렇게 적는다', async () => {
+  const db = setup();
+  seed(db, 'dlvr_backfill', '2026-01-01', '2026-10-24');
+  const r = await verify(db, fakeClient([page([item({ dlvrReqRcptDate: '2026-10-21' })])]));
+  assert.deepEqual([r.newlyFound, r.missed], [1, null]);
+  assert.match(lastRunByKind(db).dlvr_verify?.note ?? '', /판정 불가/);
+});
+
+test('교차 검증: 매일 수집의 시작점(dlvr_daily 기록)을 바꾸지 않는다', async () => {
+  const db = setup();
+  seed(db, 'dlvr_daily', '2026-10-01', '2026-10-20');
+  await verify(db, fakeClient([page([])]));
+  assert.deepEqual([lastRunByKind(db).dlvr_daily?.rangeFrom, lastRunByKind(db).dlvr_daily?.rangeTo], ['2026-10-01', '2026-10-20']);
+  const next = fakeClient([page([])]);
+  await runDeliveryDaily({ db, client: next, matcher, today: '2026-10-25', maxCalls: 10, sleep: noSleep });
+  assert.equal(next.calls[0]?.params['inqryBgnDate'], '20261018');
+});
+
+test('교차 검증: 실패하면 아무것도 저장하지 않고 사유를 기록한다', async () => {
+  const db = setup();
+  const client = fakeClient([new Error('연결 끊김'), new Error('연결 끊김'), new Error('연결 끊김')]);
+  const r = await verify(db, client);
+  assert.equal(r.status, 'failed');
+  assert.deepEqual(listDeliveries(db, { from: '2026-01-01', to: '2026-12-31' }), []);
+  assert.match(lastRunByKind(db).dlvr_verify?.error ?? '', /연결 끊김/);
 });
 
 test('매일: 받을 날이 없으면 호출하지 않고, 시작점이 없으면 백필을 먼저 하라며 멈춘다', async () => {
