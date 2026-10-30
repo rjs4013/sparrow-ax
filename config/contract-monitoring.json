@@ -160,9 +160,9 @@
       "id": "infoline",
       "label": "정보라인",
       "matchNames": [
-        "정보라인"
+        "(주)정보라인"
       ],
-      "provisional": true,
+      "provisional": false,
       "products": [
         {
           "id": "21925934",
@@ -240,13 +240,17 @@
       "id": "haros",
       "label": "하로스",
       "matchNames": [
-        "하로스"
+        "(주)하로스"
       ],
-      "provisional": true,
+      "provisional": false,
       "products": [
         {
           "id": "25175660",
           "name": "Fortify Enterprise v3.1, 5User"
+        },
+        {
+          "id": "22752086",
+          "name": "ShellGuard V2.0, Agent"
         }
       ]
     },
@@ -297,9 +301,9 @@
       "id": "codeone",
       "label": "코드원",
       "matchNames": [
-        "코드원"
+        "(주)코드원"
       ],
-      "provisional": true,
+      "provisional": false,
       "products": [
         {
           "id": "25594646",
