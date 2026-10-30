@@ -63,6 +63,16 @@ export function upsertDeliveries(db: DatabaseSync, rows: DeliveryRow[], now: str
   }
 }
 
+export const deliveryKey = (r: Pick<DeliveryRow, 'dlvrReqNo' | 'chgOrd' | 'prdctSno' | 'companyId'>): string => `${r.dlvrReqNo}|${r.chgOrd}|${r.prdctSno}|${r.companyId}`;
+
+// 이미 저장된 행의 키를 `납품요구번호|변경차수|물품순번|업체 id` 형태로 돌려준다.
+export function existingDeliveryKeys(db: DatabaseSync, rows: DeliveryRow[]): Set<string> {
+  const stmt = db.prepare('SELECT 1 AS found FROM delivery_requests WHERE dlvr_req_no = ? AND chg_ord = ? AND prdct_sno = ? AND company_id = ?');
+  const found = new Set<string>();
+  for (const r of rows) if (stmt.get(r.dlvrReqNo, r.chgOrd, r.prdctSno, r.companyId)) found.add(deliveryKey(r));
+  return found;
+}
+
 const num = (v: unknown): number | null => (v === null || v === undefined ? null : Number(v));
 
 // 납품요구 물품 행을 최근 접수일자 순으로. (납품요구번호, 물품순번, 업체)마다 한 행만 돌려주며,

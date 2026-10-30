@@ -4,16 +4,17 @@
 //   교차 검증(주 1회, 체결일자 방식):    npm run collect -- --mode verify [--days 14]
 //   납품요구(쇼핑몰, 실제 수요기관 · 금액) 백필:  npm run collect -- --mode dlvr-backfill --from 2026-01-01 --to 2026-10-28
 //   납품요구 매일(접수일자 방식):             npm run collect -- --mode dlvr-daily
+//   납품요구 교차 검증(주 1회, 접수일자 방식):  npm run collect -- --mode dlvr-verify [--days 14]
 //   입찰공고(개방표준) 매일(공고일시 방식):     npm run collect -- --mode bid-daily [--from 2026-10-20]  (--from: 그 날부터 다시 받음)
 //   낙찰정보(개방표준) 매일(개찰일시 방식):     npm run collect -- --mode award-daily [--from 2026-10-20]  (하루 약 46회 호출)
-// 호출 횟수는 --max-calls로 제한한다(기본: 백필 40, 매일 80, 교차 검증 40, 납품요구 백필 40, 납품요구 매일 20, 입찰공고 매일 40, 낙찰정보 매일 100).
+// 호출 횟수는 --max-calls로 제한한다(기본: 백필 40, 매일 80, 교차 검증 40, 납품요구 백필 40, 납품요구 매일 20, 납품요구 교차 검증 20, 입찰공고 매일 40, 낙찰정보 매일 100).
 import { parseArgs } from 'node:util';
 import { openDb, migrate } from '../db/index.ts';
 import { loadBidConfig } from '../filters/bids.ts';
 import { createMatcher, loadMonitoringConfig } from '../filters/contracts.ts';
 import { addDays, collectionRange, todayKst } from '../filters/dates.ts';
 import { createG2bClient, loadG2bConfig } from '../g2b/client.ts';
-import { runAwardDaily, runBidDaily, runCollection, runDaily, runDeliveryBackfill, runDeliveryDaily, runVerify } from './run.ts';
+import { runAwardDaily, runBidDaily, runCollection, runDaily, runDeliveryBackfill, runDeliveryDaily, runDeliveryVerify, runVerify } from './run.ts';
 
 const { values } = parseArgs({
   options: {
@@ -22,14 +23,14 @@ const { values } = parseArgs({
 });
 
 const mode = values.mode ?? 'backfill';
-const MODES = ['backfill', 'daily', 'verify', 'dlvr-backfill', 'dlvr-daily', 'bid-daily', 'award-daily'] as const;
+const MODES = ['backfill', 'daily', 'verify', 'dlvr-backfill', 'dlvr-daily', 'dlvr-verify', 'bid-daily', 'award-daily'] as const;
 if (!(MODES as readonly string[]).includes(mode)) throw new Error(`--mode는 ${MODES.join(' | ')} 중 하나여야 합니다: ${mode}`);
 const today = todayKst();
 // 모드와 맞지 않는 옵션은 조용히 무시하지 않고 알린다.
-const unsupported = ({ backfill: ['days'], daily: ['to', 'days'], verify: ['from', 'to'], 'dlvr-backfill': ['days'], 'dlvr-daily': ['from', 'to', 'days'], 'bid-daily': ['to', 'days'], 'award-daily': ['to', 'days'] } as Record<string, ('from' | 'to' | 'days')[]>)[mode]!;
+const unsupported = ({ backfill: ['days'], daily: ['to', 'days'], verify: ['from', 'to'], 'dlvr-backfill': ['days'], 'dlvr-daily': ['from', 'to', 'days'], 'dlvr-verify': ['from', 'to'], 'bid-daily': ['to', 'days'], 'award-daily': ['to', 'days'] } as Record<string, ('from' | 'to' | 'days')[]>)[mode]!;
 for (const name of unsupported) if (values[name] !== undefined) throw new Error(`--${name}은 --mode ${mode}에서 쓸 수 없습니다`);
 
-const maxCalls = Number(values['max-calls'] ?? (mode === 'daily' ? 80 : mode === 'dlvr-daily' ? 20 : mode === 'award-daily' ? 100 : 40));
+const maxCalls = Number(values['max-calls'] ?? (mode === 'daily' ? 80 : mode === 'dlvr-daily' || mode === 'dlvr-verify' ? 20 : mode === 'award-daily' ? 100 : 40));
 // 일일 한도가 오퍼레이션당 1000회이므로 그 이하로만 허용한다.
 if (!Number.isInteger(maxCalls) || maxCalls < 1 || maxCalls > 1000) throw new Error('--max-calls는 1 이상 1000 이하의 정수여야 합니다');
 
@@ -103,6 +104,18 @@ if (mode === 'backfill') {
   console.log(`납품요구 매일 수집 시작 (호출 상한 ${maxCalls}회)`);
   const r = await runDeliveryDaily({ db, client, matcher, today, maxCalls, log });
   console.log(r.status === 'success' ? `완료: 수신 ${r.fetched}행 중 9개사 납품요구 ${r.matched}행 저장, 호출 ${r.calls}회` : `실패: ${r.error} (호출 ${r.calls}회)`);
+  ok = r.status === 'success';
+} else if (mode === 'dlvr-verify') {
+  const days = Number(values.days ?? 14);
+  // 매일 수집이 최근 3일을 되돌아보므로 그보다 짧으면 검증 효력이 없다.
+  if (!Number.isInteger(days) || days < 4 || days > 62) throw new Error('--days는 4 이상 62 이하의 정수여야 합니다');
+  console.log(`납품요구 교차 검증 시작: 최근 ${days}일 (호출 상한 ${maxCalls}회)`);
+  const r = await runDeliveryVerify({ db, client, matcher, today, days, maxCalls, log });
+  console.log(
+    r.status === 'success'
+      ? `완료: 수신 ${r.fetched}행 중 9개사 납품요구 ${r.matched}행 확인, 새로 찾은 납품요구 ${r.newlyFound}행${r.missed === null ? '' : ` (매일 수집이 놓친 것 ${r.missed}행)`}, 호출 ${r.calls}회`
+      : `실패: ${r.error} (호출 ${r.calls}회)`,
+  );
   ok = r.status === 'success';
 } else {
   const days = Number(values.days ?? 14);
